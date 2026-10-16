@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.7.0
+
+Speed and cost, from a real four-session Flash plan (3 h 16 min, Opus $2.17, GLM $2.95). Per request the CLI matches the desktop app (time to first token 8–9 s vs 10–11 s, 40–46 vs 47–53 output tokens/s, 1–2.6 s between requests vs 2.6 s); the wall time was workload: the verifier made one tool call per model request (36–149 requests, 8–27 min a round), the implementer ran its own screenshot rounds before the verifier repeated them, and one first request reasoned for 20 minutes before its first tool call.
+
+### Added
+
+- `zcode cost [<dir>] [--app] [--json]`: GLM cost of every zcode session whose workspace is `<dir>` or below it, per session and in total, at Z.ai API list price (GLM-5.3-Flash $0.15 / $0.03 cached / $0.50 output per M; GLM-5.3 $1.40 / $0.26 / $4.40). Counts come from each session's engine DB (`model_usage`: implementer, subagents and verifier, across resumes) with cached input priced separately; sessions without a DB fall back to `usageTotal`, marked `~`. `--app` adds the desktop app's sessions opened in that directory. `ZCODE_PRICES` overrides rates. Uses `node:sqlite` (Node >= 22.5), else the `sqlite3` CLI.
+- `zcode watch` shows each session's cost so far and, on a TTY with several sessions, a total line. While one model request streams it shows `thinking 12m 40k chars` (or `writing …`), so a long think is not mistaken for a stall (the session record's `activity.current`).
+
+### Changed
+
+- Verifier runaway guard: a live verifier request streamed reasoning to the engine's 128k-token cap over 20 minutes. zcode now ends a verifier attempt when one request streams more than 80k characters without a tool call (real requests peak near 36k) and retries once; still runaway gives `met: null` with the reason. (The engine's RPC model options accept only `reasoningLevel`, so there is no server-side cap.) The verifier is told to use only Bash and the Playwright MCP tools and to load no skills (it was loading the desktop's `browser-use` skill first).
+- Verifier: captures everything in one Playwright run-code script per round (per viewport: wait for fonts and animations, scroll a window height at a time, one screenshot per step, plus named states), reads all PNGs in one parallel batch, and takes targeted extra shots only for unclear regions.
+- Implementer (image-capable): no own screenshot rounds; one batched sanity capture, since the verifier judges. All task prompts: decisions are made, so don't draft every file in your head first; start writing and batch tool calls.
+- Skills: the Claude Code orchestrator waits once in the background (`--timeout-ms 7000000`, Bash `run_in_background`) instead of 9-minute foreground slices (25 Opus calls in the run above); visual criteria go on sessions that build finished UI, not scaffolds, and integration sessions get only cross-cutting ones.
+- README redesigned around a run sheet of the real plan.
+
+### Fixed
+
+- Verifier rounds judged stale pages: the Playwright MCP browser profile lives in the session home and kept its HTTP cache and storage across rounds, so a live round 2 saw the pre-fix HTML (http-server `max-age=3600`) and forced an extra repair. zcode now wipes the profile's cache and storage before each verifier round, and the capture script disables the cache over CDP.
+- `verifier edited files` false positive: a parallel plan sibling that registered a few ms after this session was missing from the concurrent-ownership map during the verifier diff; live leases are now re-read before attributing changes.
+- `package.json` listed the package itself (`@0xgeorgemathew/zcode@^0.4.0`) as a dependency, so every install pulled a nested 0.4.0 copy. Removed: zero dependencies again.
+
 ## 0.6.0
 
 Independent visual verification and live progress, from a real run whose hero headline was invisible while the executor reported it visible: GLM-5.3 cannot see images (reading a PNG returns only an upload confirmation), so it judged from the DOM, and it graded its own work.

@@ -12,7 +12,9 @@ const USAGE = `usage:
   zcode status [<id>] [--all] [--json] one session in detail, or the 15 most recent (--all: every session)
   zcode wait <id…> [--any] [--json]    block until sessions finish; print handbacks
   zcode watch [<id…> | --plan <name>] [--stall-min n]
-                                       live one-line-per-session view (no model tokens); exits when all finish
+                                       live one-line-per-session view with cost (no model tokens); exits when all finish
+  zcode cost [<dir>] [--app] [--json]  GLM cost of the zcode sessions in a directory (default: current dir) at
+                                       API list price; --app adds the desktop app's sessions there
   zcode result <id> [--full] [--json]  print a finished session's handback (brief by default)
   zcode cancel <id> [--json]           stop a running session
   zcode plan check <file>              validate a plan file (ids, after, cycles, owns, effort)
@@ -146,7 +148,7 @@ function parseMcpSpec(value) {
   return parsed;
 }
 
-const COMMANDS = new Set(['run', 'task', 'agent', 'resume', 'status', 'list', 'wait', 'watch', 'cancel', 'login', 'doctor', 'skills', 'result', 'plan', '__plan', '__exec']);
+const COMMANDS = new Set(['run', 'task', 'agent', 'resume', 'status', 'list', 'wait', 'watch', 'cost', 'cancel', 'login', 'doctor', 'skills', 'result', 'plan', '__plan', '__exec']);
 const TASK_ONLY = new Set(['task', 'accept', 'check', 'file', 'context', 'touch', 'maxRepairs', 'checkTimeoutMs', 'decisions', 'units', 'visual', 'viewports', 'serve', 'preflight']);
 const FULL_COMMANDS = new Set(['run', 'task', 'agent', 'resume', 'wait', 'result', '__exec']);
 const START_ONLY = new Set(['id', 'label', 'owns', 'touch', 'preflight', 'allowOverlap', 'mcpSpecs', 'mcpInherit', 'noBrowser', 'skillsDirs', 'noSkills', 'profile', 'cwd']);
@@ -200,6 +202,7 @@ function parseArgv(argv) {
       full: false,
       any: false,
       all: false,
+      app: false,
     },
   };
   const valueFlags = new Map([
@@ -220,7 +223,7 @@ function parseArgv(argv) {
     ['--include-reasoning', ['includeReasoning', true]], ['--quiet', ['quiet', true]],
     ['--detach', ['detach', true]], ['--allow-overlap', ['allowOverlap', true]],
     ['--thinking', ['thinking', true]], ['--no-thinking', ['thinking', false]], ['--stream', ['stream', true]],
-    ['--full', ['full', true]], ['--any', ['any', true]], ['--all', ['all', true]], ['--preflight', ['preflight', true]],
+    ['--full', ['full', true]], ['--any', ['any', true]], ['--all', ['all', true]], ['--app', ['app', true]], ['--preflight', ['preflight', true]],
   ]);
   const numeric = (flag, value, { min = 1 } = {}) => {
     const n = Number(value);
@@ -305,6 +308,7 @@ function parseArgv(argv) {
   for (const k of ['plan', 'stallMin']) {
     if (out.given.has(k) && cmd !== 'watch') fail(2, `--${flagName(k)} is only valid with "zcode watch".`);
   }
+  if (out.given.has('app') && cmd !== 'cost') fail(2, '--app is only valid with "zcode cost".');
   if (out.given.has('any') && cmd !== 'wait') fail(2, '--any is only valid with "zcode wait".');
   if (out.given.has('full') && !FULL_COMMANDS.has(cmd)) fail(2, `--full is not valid with "zcode ${cmd}".`);
   if (out.given.has('session') && cmd !== 'run' && cmd !== 'plan') fail(2, '--session is only valid with "zcode run"; use "zcode resume <id>".');
@@ -379,6 +383,8 @@ async function main() {
     case 'result':
     case 'cancel':
       return require('../lib/commands/sessions.js')(parsed);
+    case 'cost':
+      return require('../lib/commands/cost.js')(parsed);
     case 'login':
       return require('../lib/commands/login.js')(parsed);
     case 'doctor':

@@ -1100,3 +1100,61 @@ at the command entry) so the builders can run inside the supervisor.
 - `ensureLocalExclude` (lib/workspace.js) appends `.zcode/` and
   `.playwright-mcp/` to `info/exclude` at session start.
 - `lib/help.js`: per-command help; `status` shows 15 sessions unless `--all`.
+
+## 19. 0.7 — speed and cost
+
+### 19.1 Where the time goes (measured, 2026-10-16)
+
+Engine DBs (`model_usage`, `tool_usage`, `turn_usage` in each session's
+`home/.zcode/cli/db/db.sqlite`; the desktop's is `~/.zcode/cli/db/db.sqlite`)
+record every model request with `started_at`, `time_to_first_token_ms`,
+`duration_ms`, input/cached/output tokens. Comparing the White Credit v3 plan
+(four CLI sessions, GLM-5.3-Flash, effort high) with the desktop's Flash
+sessions of the same week:
+
+| | CLI sessions | desktop app |
+|---|---|---|
+| time to first token | 7.6–9.0 s | 10.5–11.2 s |
+| output tokens/s (after first token) | 37–46 | 47–53 |
+| gap between consecutive requests (tools + engine) | 0.6–2.6 s | 2.6 s |
+
+The CLI is not slower per request: both are the same engine and API. About
+98% of a session's wall time is model time; checks took 0.1–0.2 min per
+session. The run was long because of request volume and reasoning length:
+
+- Verifier rounds took 8–27 min with 36–149 requests, one Playwright tool call
+  per request (navigate, resize, evaluate, screenshot, read …). 0.7 asks for
+  one run-code capture script and one parallel read batch. The live check of
+  that change found a second cost: the Playwright MCP profile in the session
+  home keeps its HTTP cache across rounds, so round 2 judged the pre-fix page
+  and forced an extra repair; `resetBrowserState` wipes cache and storage
+  before each round and the script disables the cache over CDP. A third
+  live finding: one verifier request (after it loaded the desktop's
+  `browser-use` skill) streamed reasoning to the engine's 128k output cap for
+  20 min. The engine's RPC model options are strict `{reasoningLevel}` (a
+  `maxOutputTokens` option is rejected with `unrecognized_keys`; the cap lives
+  only in provider config, shared with the implementer), so zcode guards it
+  itself: a verifier attempt whose current request streams over 80k chars
+  without a tool call is killed and retried. The verifier is told to load no
+  skills. `activity.current` ({doing: thinking|writing, since, chars})
+  lets `watch` show a long stream as work, not a stall.
+- Implementers that can see images ran their own screenshot rounds (the
+  scaffold: 54 Playwright calls) that the verifier then repeated. 0.7: one
+  batched sanity capture.
+- Single requests reasoned for up to 20 min (scaffold's first request: 46.6k
+  output tokens, 177 KB of reasoning drafting every file before its first tool
+  call). 0.7 tells the executor the decisions are made and to start writing.
+- The orchestrator polled `plan wait` in 9-minute slices: 25 full-context Opus
+  calls. The Claude Code skill now waits once in the background.
+
+### 19.2 Cost
+
+`lib/cost.js` prices the engine ledger (`model_usage`, grouped by model) at
+Z.ai list price with cached input separated (`input_tokens` includes cached and
+cache-write tokens; agent loops run ~97% cached). It reads with `node:sqlite`
+when available (Node >= 22.5, ExperimentalWarning suppressed), else
+`sqlite3 -readonly -json`; read-only opens never block the engine's WAL
+writer. Results are cached per DB+WAL mtime so `watch` can ask every 2 s.
+Sessions without a DB fall back to `usageTotal` (estimate, `~`). `zcode cost
+--app` queries the desktop DB joined on `session.directory` (given and
+symlink-resolved spellings).

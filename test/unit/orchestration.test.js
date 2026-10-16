@@ -312,6 +312,7 @@ test('verifier met: a fresh Flash session at effort high decides visual; executo
   assert.equal(s[0].model.modelId, 'GLM-5.3');
   assert.equal(s[1].model.modelId, 'GLM-5.3-Flash', 'always an image-capable model, whatever the task model');
   assert.equal(s[1].model.options.reasoningLevel, 'high');
+  assert.deepEqual(Object.keys(s[1].model.options), ['reasoningLevel'], 'the engine RPC accepts only reasoningLevel');
   assert.match(s[1].content, /independent visual verifier/);
   assert.match(s[1].content, /zcode-visual/);
   assert.match(s[1].content, /\/verify\/1\//);
@@ -414,8 +415,9 @@ test('the implementer prompt varies with image support', async () => {
   assert.match(blind, /npm run preview/);
   assert.doesNotMatch(blind, /capture screenshots/);
   const sees = buildTaskPrompt(c, { canSeeImages: true });
-  assert.match(sees, /you can look at screenshots/);
-  assert.match(sees, /independent verifier will re-judge/);
+  assert.match(sees, /independent vision verifier judges these criteria/);
+  assert.match(sees, /ONE Playwright run-code call/);
+  assert.match(sees, /Do not run your own screenshot rounds/);
   assert.doesNotMatch(sees, /cannot see images/);
 
   fake.setScript({ turns: [{ response: done() }] });
@@ -424,7 +426,7 @@ test('the implementer prompt varies with image support', async () => {
   fake.resetEngineState();
   fake.setScript({ turns: [{ response: done() }] });
   await execute(invocation(fake, { id: 'vv-10', model: 'GLM-5.3-Flash', contract: { visual: [CRIT] }, checks: [] }));
-  assert.match(sendLog().filter((x) => x.content.startsWith('You are Zcode')).pop().content, /you can look at screenshots/);
+  assert.match(sendLog().filter((x) => x.content.startsWith('You are Zcode')).pop().content, /one quick sanity pass/);
 });
 
 test('repair prompt lists verifier entries; without visual it is unchanged', () => {
@@ -522,7 +524,7 @@ test('watch: piped output prints a changed line once; exits 0 when finished; --h
   await execute(invocation(fake, { id: 'wt-1', checks: [] }));
   const r = cli(['watch', 'wt-1']);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /^wt-1  \S+  \S+  last: Write \S+ ago  req 1  sub 0\n$/);
+  assert.match(r.stdout, /^wt-1  \S+  \S+  last: Write \S+ ago  req 1  sub 0(  \$\d+\.\d\d)?\n$/);
   const none = cli(['watch', 'nope']);
   assert.equal(none.status, 2);
   const h = cli(['watch', '--help']);
