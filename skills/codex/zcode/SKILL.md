@@ -40,6 +40,8 @@ Pick the cheapest shape that keeps each session finishable without you.
 - **Several sessions** when pieces are independent and own disjoint paths. Launch them `--detach` in parallel; each may have its own units.
 - **A plan** when there are dependencies (scaffold → parallel features → integration). `zcode plan run plan.json` sequences and parallelises for you; you wait once.
 
+Visual criteria cost a verifier round (minutes of Flash time on the critical path), so put them where finished UI is built. A scaffold of stubs gets checks only; an integration session gets only cross-cutting criteria (the whole page in order, anchors, the dialog opening from every button), not a re-check of what the feature sessions' verifiers already passed.
+
 Parallel safety is automatic: each session gets `ZCODE_PORT`, `ZCODE_OUT`, `ZCODE_TMP` and `ZCODE_SESSION_ID`. Tell the first (scaffold) session to make dev-server ports, build output dirs and test artifacts honour them. zcode keeps `.zcode/` and `.playwright-mcp/` out of git via the repo's local `.git/info/exclude`; you don't need to touch `.gitignore` for them.
 
 ## The handoff
@@ -85,7 +87,7 @@ zcode plan resume <name> --session <id> "<answer>"  # answer one blocked session
 
 Session ids are global and permanent: give every new run a fresh prefix (`wc3-scaffold`, …) so `plan check` passes first time. A task session may run 2 h by default; a big session (a whole page, a whole flow) can set `"limits": {"timeoutMs": 10800000}`. If one still times out, `zcode plan resume <name> "continue"` picks up from the files it already wrote.
 
-While sessions run, the user can watch them with `zcode watch` (live phase, last tool, model requests, `STALLED?` after 8 idle minutes); you never run it. `wait` timeout lines carry `idleMs`/`stalled`: a stalled session is the one case to `cancel` + `resume` early.
+While sessions run, the user can watch them with `zcode watch` (live phase, last tool, model requests, GLM cost so far, `STALLED?` after 8 idle minutes) and total a directory with `zcode cost`; you never run either. `wait` timeout lines carry `idleMs`/`stalled`: a stalled session is the one case to `cancel` + `resume` early.
 
 Real tasks outlast a single shell call; always wait in bounded slices. zcode needs network access (the GLM API) and write access to `~/.zcode-cli` and the target repo: in a sandboxed Codex session, if a command fails with a sandbox or network error, re-run the same command with escalated permissions instead of changing it.
 
@@ -134,7 +136,7 @@ You read the empty repo, decide the design system, copy, motion, form logic and 
     {"id": "integration", "after": ["landing", "apply"], "owns": ["src/App.tsx", "e2e/**"],
      "objective": "Wire everything, full-page pass, fix integration issues",
      "checks": ["npm run build", "npm test", "npm run e2e"],
-     "visual": ["full page at 390 and 1440 matches the decisions; motion respects reduced motion"]}
+     "visual": ["every section heading is readable in page order at 390 and 1440", "the apply dialog opens readable from the hero and closing buttons"]}
   ]
 }
 ```
