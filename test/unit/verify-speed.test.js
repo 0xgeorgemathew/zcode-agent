@@ -1,39 +1,40 @@
 'use strict';
-// 0.7 verifier: batched capture, cache-disabled browser, browser state wiped
-// between rounds (a live round judged a stale cached page).
+// 0.7 verifier: batched capture to the bottom of the page; 0.7.1: the browser
+// runs --isolated (fresh profile per engine: no stale cache, no profile lock).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { buildVerifierPrompt, resetBrowserState } = require('../../lib/verify.js');
+const { buildVerifierPrompt } = require('../../lib/verify.js');
+const { effectiveMcpServers } = require('../../lib/isolation.js');
 
-test('verifier prompt asks for one capture script, a disabled cache and one read batch', () => {
+test('verifier prompt asks for one capture script to the bottom of the page and one read batch', () => {
   const p = buildVerifierPrompt(
     { objective: 'O', visual: ['h1 readable'], viewports: ['1440x900'] },
     { session: { id: 's', port: 41001, out: '/w/.zcode/out/s', tmp: '/t' }, round: 2 }
   );
   assert.match(p, /ONE Playwright run-code call/);
   assert.match(p, /Do not load skills/);
-  assert.match(p, /Network\.setCacheDisabled/);
+  assert.match(p, /to the bottom of the page/);
+  assert.doesNotMatch(p, /at most \d+ steps/);
   assert.match(p, /ONE batch of parallel Read calls/);
   assert.match(p, /\/w\/\.zcode\/out\/s\/verify\/2\/<viewport>-<n>\.png/);
 });
 
-test('resetBrowserState wipes cache and storage of the MCP browser profile, keeps the rest', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-rbs-'));
-  const def = path.join(home, 'Library', 'Caches', 'ms-playwright-mcp', 'mcp-chrome-1', 'Default');
-  for (const d of ['Cache', 'Code Cache', 'Local Storage', 'Preferences-dir']) {
-    fs.mkdirSync(path.join(def, d), { recursive: true });
-    fs.writeFileSync(path.join(def, d, 'x'), 'x');
-  }
-  resetBrowserState(home);
-  assert.equal(fs.existsSync(path.join(def, 'Cache')), false);
-  assert.equal(fs.existsSync(path.join(def, 'Code Cache')), false);
-  assert.equal(fs.existsSync(path.join(def, 'Local Storage')), false);
-  assert.equal(fs.existsSync(path.join(def, 'Preferences-dir', 'x')), true);
-  resetBrowserState(path.join(home, 'missing')); // no profile: no throw
-  fs.rmSync(home, { recursive: true, force: true });
+test('the inherited Playwright MCP runs --isolated; a def that picks its profile is kept', () => {
+  const live = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-iso-'));
+  const write = (pw) => {
+    fs.mkdirSync(path.join(live, 'cli'), { recursive: true });
+    fs.writeFileSync(path.join(live, 'cli', 'config.json'), JSON.stringify({ mcp: { servers: { playwright: pw } } }));
+  };
+  write({ type: 'stdio', command: 'npx', args: ['@playwright/mcp@latest'] });
+  assert.deepEqual(effectiveMcpServers({ live }).playwright.args, ['@playwright/mcp@latest', '--isolated']);
+  write({ type: 'stdio', command: 'npx', args: ['@playwright/mcp@latest', '--user-data-dir=/x'] });
+  assert.deepEqual(effectiveMcpServers({ live }).playwright.args, ['@playwright/mcp@latest', '--user-data-dir=/x']);
+  write({ type: 'stdio', command: 'npx', args: ['@playwright/mcp@latest', '--isolated'] });
+  assert.deepEqual(effectiveMcpServers({ live }).playwright.args, ['@playwright/mcp@latest', '--isolated']);
+  fs.rmSync(live, { recursive: true, force: true });
 });
 
 test('a runaway verifier request is ended and retried; still runaway gives met:null with the reason', async () => {

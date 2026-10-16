@@ -1,6 +1,6 @@
 {
   "name": "@0xgeorgemathew/zcode",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Lean GLM-5.3-Flash executor for orchestrator agents: task contracts, parallel sessions and plans, zcode-run checks, an independent vision verifier, live watch with cost, structured handbacks. Wraps the ZCode engine. Zero dependencies.",
   "license": "MIT",
   "private": false,

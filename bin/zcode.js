@@ -95,6 +95,8 @@ execution:
   --mcp-list            print the effective MCP server set as JSON and exit
   --skills <dir>        add skills (repeatable): one skill dir or a root of them
   --no-skills           empty skill set
+  --inherit-desktop     also give the executor the desktop's AGENTS.md, skills,
+                        plugins and agent profiles (hermetic by default)
 
 output:
   --json                NDJSON events on stdout; final line is the compact brief
@@ -151,7 +153,7 @@ function parseMcpSpec(value) {
 const COMMANDS = new Set(['run', 'task', 'agent', 'resume', 'status', 'list', 'wait', 'watch', 'cost', 'cancel', 'login', 'doctor', 'skills', 'result', 'plan', '__plan', '__exec']);
 const TASK_ONLY = new Set(['task', 'accept', 'check', 'file', 'context', 'touch', 'maxRepairs', 'checkTimeoutMs', 'decisions', 'units', 'visual', 'viewports', 'serve', 'preflight']);
 const FULL_COMMANDS = new Set(['run', 'task', 'agent', 'resume', 'wait', 'result', '__exec']);
-const START_ONLY = new Set(['id', 'label', 'owns', 'touch', 'preflight', 'allowOverlap', 'mcpSpecs', 'mcpInherit', 'noBrowser', 'skillsDirs', 'noSkills', 'profile', 'cwd']);
+const START_ONLY = new Set(['id', 'label', 'owns', 'touch', 'preflight', 'allowOverlap', 'mcpSpecs', 'mcpInherit', 'noBrowser', 'skillsDirs', 'noSkills', 'inheritDesktop', 'profile', 'cwd']);
 
 function parseArgv(argv) {
   const out = {
@@ -193,6 +195,7 @@ function parseArgv(argv) {
       mcpList: false,
       skillsDirs: [],
       noSkills: false,
+      inheritDesktop: false,
       includeReasoning: false,
       quiet: false,
       thinking: undefined,
@@ -219,7 +222,7 @@ function parseArgv(argv) {
   ]);
   const boolFlags = new Map([
     ['--json', ['json', true]], ['--fresh', ['fresh', true]], ['--mcp-inherit', ['mcpInherit', true]],
-    ['--mcp-list', ['mcpList', true]], ['--no-skills', ['noSkills', true]], ['--no-browser', ['noBrowser', true]],
+    ['--mcp-list', ['mcpList', true]], ['--no-skills', ['noSkills', true]], ['--inherit-desktop', ['inheritDesktop', true]], ['--no-browser', ['noBrowser', true]],
     ['--include-reasoning', ['includeReasoning', true]], ['--quiet', ['quiet', true]],
     ['--detach', ['detach', true]], ['--allow-overlap', ['allowOverlap', true]],
     ['--thinking', ['thinking', true]], ['--no-thinking', ['thinking', false]], ['--stream', ['stream', true]],

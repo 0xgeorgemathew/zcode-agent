@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.1
+
+Hermetic executor. The engine DBs of the White Credit v3 plan showed the CLI's long sessions were not a CLI-vs-desktop speed gap (same engine, same SQLite writes; engine start ~1 s, MCP connect ~1.4 s, all inter-request gaps 2.6–8.6 min of 50–94) but a handful of requests: in scaffold, landing and apply, 2–6 requests of 13–21 min each took 29–48% of model time, each drafting the whole build in its reasoning (176k chars, 188 code blocks in one) and re-arguing the desktop's `AGENTS.md` ("I must read CLOUDFLARE.md…") against the contract.
+
+### Changed
+
+- The executor is hermetic by default: no desktop `AGENTS.md`, user skills, plugins (`plugins.enabled: false`) or agent profiles (only the one `--profile` names). `--inherit-desktop` (or `ZCODE_INHERIT_DESKTOP=1`) mirrors them as before. Every v3 session had loaded the desktop-only `browser-use:control-browser` plugin skill, which the user-skill filter could not catch.
+- The inherited Playwright MCP runs `--isolated` (fresh in-memory profile per engine) unless its args already pick a profile. The persistent profile in the session home caused "Browser is already in use" errors in verifier sessions (up to 12 a run) and the stale-cache rounds; the 0.7.0 cache wipe and CDP cache-disable step are removed.
+- Verifier capture scrolls to the bottom of the page (steps from the page height) instead of at most 12 steps, which could miss the end of a long page on mobile.
+- Verifier runaway guard raised from 80k to 200k streamed chars: a safety net far above any real request (peak ~36k), never applied to the implementer.
+- Task prompt: "don't re-weigh the decisions or draft files in your reasoning".
+- Skills: keep the plan's critical path short (the scaffold mounts every feature's stub; integration, if any, is a small cross-feature pass).
+
+### Measured (live A/B, same 5-section static-site contract, 2 viewports, 3 visual criteria, Flash, effort high, run side by side)
+
+| | 0.7.0 | 0.7.1 |
+|---|---|---|
+| wall time | 19.5 min | 16.7 min |
+| first request input | 29.3k tokens | 19.1k tokens |
+| desktop files read / mentioned in first reasoning | CLOUDFLARE.md read twice, 12 mentions | none |
+| verifier | 10 requests, 5.4 min | 8 requests, 3.5 min |
+| result | completed, checks pass, visual 8/8, 0 repairs | completed, checks pass, visual 8/8, 0 repairs |
+| GLM cost | $0.087 | $0.073 |
+
+One run each, so treat the margin as indicative. Both runs still spent their first request (6 min, ~60k chars of reasoning, 50–70 code blocks) planning the whole build before the first tool call: the hermetic home removes the distraction, not the habit.
+
 ## 0.7.0
 
 Speed and cost, from a real four-session Flash plan (3 h 16 min, Opus $2.17, GLM $2.95). Per request the CLI matches the desktop app (time to first token 8–9 s vs 10–11 s, 40–46 vs 47–53 output tokens/s, 1–2.6 s between requests vs 2.6 s); the wall time was workload: the verifier made one tool call per model request (36–149 requests, 8–27 min a round), the implementer ran its own screenshot rounds before the verifier repeated them, and one first request reasoned for 20 minutes before its first tool call.

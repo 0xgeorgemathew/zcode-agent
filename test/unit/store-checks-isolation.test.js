@@ -91,6 +91,7 @@ test('isolation: per-session HOME refresh rewrites config but never engine state
     home, root, key: 'K1', live,
     mcpSpecs: [{ word: { type: 'stdio', command: 'node' } }],
     skillsDirs: [extra],
+    inheritDesktop: true,
   });
   assert.equal(first.mode, 'synthesized');
   assert.deepEqual(first.mcp.added, ['word']);

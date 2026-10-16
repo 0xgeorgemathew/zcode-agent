@@ -1147,6 +1147,30 @@ session. The run was long because of request volume and reasoning length:
 - The orchestrator polled `plan wait` in 9-minute slices: 25 full-context Opus
   calls. The Claude Code skill now waits once in the background.
 
+### 19.3 0.7.1 — hermetic executor
+
+Deeper read of the same DBs: the CLI writes the same engine SQLite as the
+desktop (same `zcode.cjs`), one small DB per session; engine start ~1 s, MCP
+connect ~1.4 s, all inter-request gaps (tools included) 2.6–8.6 min of 50–94
+min sessions. Not the bottleneck. The reasoning level is not either (CLI
+`high`, desktop `max`). What differs is a few huge planning requests: 2–6 per
+large session at 13–21 min (29–48% of model time), each drafting every file in
+reasoning; desktop Flash had 3 requests over 40k output tokens in 9,468, the
+CLI one in every large session. The scaffold's burst re-argued the mirrored
+desktop `AGENTS.md` (mandatory CLOUDFLARE.md + skills) at least six times; all
+four sessions loaded the desktop's `browser-use` plugin skill (plugins come
+through the shared plugin cache, past the user-skill filter).
+
+0.7.1: no desktop AGENTS.md / skills / plugins / unnamed agent profiles unless
+`--inherit-desktop`; Playwright `--isolated` (removes the profile lock
+("Browser is already in use", up to 12 per run in verifier sessions) and the
+stale cache, so `resetBrowserState` is gone); capture to the page bottom; the
+runaway guard is a 200k-char safety net. Live A/B (CHANGELOG 0.7.1): 19.5 →
+16.7 min, first-request input 29.3k → 19.1k tokens, verifier 5.4 → 3.5 min,
+same 8/8 visual. The first-request planning burst (6 min) remains in both;
+the next lever is a lower implementer reasoning level or a short plan-only
+first turn, each to be A/B-tested for quality before adoption.
+
 ### 19.2 Cost
 
 `lib/cost.js` prices the engine ledger (`model_usage`, grouped by model) at

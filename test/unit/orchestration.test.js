@@ -483,13 +483,13 @@ test('copied agent profiles follow the session model; the live files are untouch
   for (const [n, t] of Object.entries(pins)) fs.writeFileSync(path.join(fake.live, 'agents', n), t);
   const { buildEngineHome } = require('../../lib/isolation.js');
   const home = path.join(fake.base, 'h');
-  buildEngineHome({ home, root: fake.root, key: 'k', live: fake.live });
+  buildEngineHome({ home, root: fake.root, key: 'k', live: fake.live, inheritDesktop: true });
   const got = (n) => fs.readFileSync(path.join(home, '.zcode', 'agents', n), 'utf8');
   assert.match(got('a.md'), /model: "account:zai-individual-coding-plan\/GLM-5\.3-Flash"/, 'default session model is Flash');
   assert.match(got('b.md'), /model: "custom:account%3Azai-individual-coding-plan:GLM-5\.3-Flash"/);
   assert.equal(got('d.md'), pins['d.md']);
   assert.equal(got('e.md'), pins['e.md']);
-  buildEngineHome({ home, root: fake.root, key: 'k', live: fake.live, model: 'GLM-5.3' });
+  buildEngineHome({ home, root: fake.root, key: 'k', live: fake.live, model: 'GLM-5.3', inheritDesktop: true });
   assert.match(got('a.md'), /GLM-5\.3"\n/);
   assert.match(got('c.md'), /plan\/GLM-5\.3\n/);
   for (const [n, t] of Object.entries(pins)) assert.equal(fs.readFileSync(path.join(fake.live, 'agents', n), 'utf8'), t);

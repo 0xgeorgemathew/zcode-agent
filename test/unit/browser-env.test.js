@@ -51,7 +51,7 @@ test('the desktop playwright server is inherited by default; --no-browser drops 
   assert.deepEqual(Object.keys(effectiveMcpServers({ live, inherit: true, browser: false })), ['exa']);
 });
 
-test('the desktop-only control-browser skill is not copied into the engine HOME', () => {
+test('the desktop-only control-browser skill is not copied, even with --inherit-desktop', () => {
   const live = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-live-'));
   for (const name of ['control-browser', 'other']) {
     fs.mkdirSync(path.join(live, 'skills', name), { recursive: true });
@@ -59,6 +59,31 @@ test('the desktop-only control-browser skill is not copied into the engine HOME'
   }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-eh-'));
   const { buildEngineHome } = require('../../lib/isolation.js');
-  buildEngineHome({ home, live, key: 'k' });
+  buildEngineHome({ home, live, key: 'k', inheritDesktop: true });
   assert.deepEqual(fs.readdirSync(path.join(home, '.zcode', 'skills')), ['other']);
+});
+
+test('hermetic by default: no desktop AGENTS.md, skills, plugins or unnamed agent profiles', () => {
+  const live = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-live-'));
+  fs.mkdirSync(path.join(live, 'skills', 'cloudflare'), { recursive: true });
+  fs.writeFileSync(path.join(live, 'skills', 'cloudflare', 'SKILL.md'), '---\nname: x\n---\n');
+  fs.writeFileSync(path.join(live, 'AGENTS.md'), 'Read CLOUDFLARE.md first.');
+  fs.mkdirSync(path.join(live, 'agents'), { recursive: true });
+  for (const n of ['flash.md', 'mine.md']) fs.writeFileSync(path.join(live, 'agents', n), '---\nname: x\n---\n');
+  fs.mkdirSync(path.join(live, 'cli'), { recursive: true });
+  fs.writeFileSync(path.join(live, 'cli', 'config.json'), JSON.stringify({ plugins: { enabledPlugins: { 'a@b': true } } }));
+  const { buildEngineHome } = require('../../lib/isolation.js');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-eh-'));
+  const z = path.join(home, '.zcode');
+  const built = buildEngineHome({ home, live, key: 'k', profile: 'mine' });
+  assert.equal(built.skillsCopied, 0);
+  assert.deepEqual(fs.readdirSync(path.join(z, 'skills')), []);
+  assert.equal(fs.existsSync(path.join(z, 'AGENTS.md')), false);
+  assert.deepEqual(fs.readdirSync(path.join(z, 'agents')), ['mine.md'], 'only the named profile');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(z, 'cli', 'config.json'), 'utf8')).plugins.enabled, false);
+  buildEngineHome({ home, live, key: 'k', inheritDesktop: true });
+  assert.deepEqual(fs.readdirSync(path.join(z, 'skills')), ['cloudflare']);
+  assert.equal(fs.readFileSync(path.join(z, 'AGENTS.md'), 'utf8'), 'Read CLOUDFLARE.md first.');
+  assert.deepEqual(fs.readdirSync(path.join(z, 'agents')).sort(), ['flash.md', 'mine.md']);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(z, 'cli', 'config.json'), 'utf8')).plugins.enabled, undefined);
 });

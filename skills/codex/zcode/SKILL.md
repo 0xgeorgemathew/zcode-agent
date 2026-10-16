@@ -40,6 +40,8 @@ Pick the cheapest shape that keeps each session finishable without you.
 - **Several sessions** when pieces are independent and own disjoint paths. Launch them `--detach` in parallel; each may have its own units.
 - **A plan** when there are dependencies (scaffold → parallel features → integration). `zcode plan run plan.json` sequences and parallelises for you; you wait once.
 
+Keep the critical path short: each `after` stage waits for a whole session (tens of minutes). Have the scaffold mount every feature's stub so features need no wiring; then integration, if you need one at all, is a small pass (cross-feature checks, fix only what breaks between features), not a rebuild.
+
 Visual criteria cost a verifier round (minutes of Flash time on the critical path), so put them where finished UI is built. A scaffold of stubs gets checks only; an integration session gets only cross-cutting criteria (the whole page in order, anchors, the dialog opening from every button), not a re-check of what the feature sessions' verifiers already passed.
 
 Parallel safety is automatic: each session gets `ZCODE_PORT`, `ZCODE_OUT`, `ZCODE_TMP` and `ZCODE_SESSION_ID`. Tell the first (scaffold) session to make dev-server ports, build output dirs and test artifacts honour them. zcode keeps `.zcode/` and `.playwright-mcp/` out of git via the repo's local `.git/info/exclude`; you don't need to touch `.gitignore` for them.
@@ -134,7 +136,7 @@ You read the empty repo, decide the design system, copy, motion, form logic and 
      "checks": ["npm run build", "npm test -- apply", "npx playwright test e2e/apply.spec.ts"],
      "visual": ["OTP code is visible on screen after entering a number", "step indicator shows the current step at 390px"]},
     {"id": "integration", "after": ["landing", "apply"], "owns": ["src/App.tsx", "e2e/**"],
-     "objective": "Wire everything, full-page pass, fix integration issues",
+     "objective": "Full-page pass across landing and apply: fix only what breaks between them",
      "checks": ["npm run build", "npm test", "npm run e2e"],
      "visual": ["every section heading is readable in page order at 390 and 1440", "the apply dialog opens readable from the hero and closing buttons"]}
   ]
