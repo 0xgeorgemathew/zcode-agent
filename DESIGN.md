@@ -1182,3 +1182,13 @@ writer. Results are cached per DB+WAL mtime so `watch` can ask every 2 s.
 Sessions without a DB fall back to `usageTotal` (estimate, `~`). `zcode cost
 --app` queries the desktop DB joined on `session.directory` (given and
 symlink-resolved spellings).
+
+
+## 20. 1.0 — zcode-agent
+
+- **Identity.** npm `zcode-agent` (command `zcode-agent`), state `~/.zcode-agent` (pre-1.0 `~/.zcode-cli` moved, symlink left). Repo `0xgeorgemathew/zcode-agent`, an npm workspace: `packages/cli`, `packages/engine`. Not affiliated with Z.ai.
+- **Engine.** `@zcode-agent/engine` is built by `scripts/build-engine.mjs` from the tag in `packages/engine/engine.json` (v3.15.1 → engine 0.16.9): `pnpm install --frozen-lockfile --filter @zcode/cli...`, `ZCODE_ENV=production` (else the `.test.json` provider config is bundled), `build`, `build:desktop-agent` (minified, as the app ships), then the app's content plugins with upstream's staging allow-list. The engine finds `provider/` and `packages/` next to `zcode.cjs`, so the package keeps that layout. Minimum node 22.13 (`node:sqlite` unflagged). Resolution: `ZAI_CODE_ENGINE` → package → app bundle (macOS, Windows, Linux) → PATH.
+- **Key.** env → login → the app's plain API key (`v2/provider_config.json` zai-api rule, then `cli/config.json` builtin:zai, then `v2/config.json` builtin Z.ai providers). Never `credentials.json` (OAuth).
+- **Inheritance.** Default: the app's enabled MCP servers minus OAuth-only remotes, and its user skills (symlinks followed, own skill excluded). `--hermetic`: neither. `--inherit-desktop`: plus plugins, agent profiles, the app's `AGENTS.md` (appended to ours). Every HOME gets `assets/executor-agents.md` as `AGENTS.md`.
+- **MCP connect.** The engine serialises RPC behind `mcp/list connect` (live: everything, `mcp/list status` included, waited 30 s on one unreachable SSE server). The connect is awaited (45 s); failed inherited servers go to `mcp-health.json` (name → definition hash, time) and are skipped for 6 h.
+- **Standalone browser.** No app Playwright server → `@playwright/mcp@0.0.83 --isolated --headless --browser chromium`; `doctor --install-browser` runs that version's `playwright install chromium`.

@@ -1,0 +1,914 @@
+'use strict';
+// One invocation, start to handback. Every command that talks to the
+// engine (run, task, agent, resume, detached workers) goes through
+// execute(), so lifecycle, isolation, cancellation and the result shape are
+// identical across them.
+//
+//   record → capacity → lease → engine HOME → snapshot → open session
+//   → turn → [task: handback, checks, bounded repair turns] → subagents
+//   → diff → status → result.json + final record
+//
+// Side-effect discipline: only the session-open phase is retried (it never
+// touches the workspace). A prompt that reached the engine is never re-sent
+// automatically; continuing is an explicit `zcode resume`, which tells the
+// model the earlier work is already applied.
+const fs = require('node:fs');
+const path = require('node:path');
+const store = require('./store.js');
+const { resolveRuntime, makeClient } = require('./bootstrap.js');
+const { buildEngineHome, rootDir, liveDir, recordMcpHealth } = require('./isolation.js');
+const { openSession, runTurn, TurnError } = require('./appserver.js');
+const { runChecks } = require('./checks.js');
+const { reservePort } = require('./ports.js');
+const {
+  workspaceRoot,
+  isOwned,
+  isZcodePath,
+  acquireLease,
+  liveLeases,
+  snapshot,
+  diffSnapshots,
+  ensureLocalExclude,
+} = require('./workspace.js');
+const {
+  buildTaskPrompt,
+  buildRepairPrompt,
+  buildResumePrompt,
+  HANDBACK_REQUEST,
+  parseHandback,
+  deriveStatus,
+  visualGaps,
+} = require('./contract.js');
+const { buildVerifierPrompt, parseVisualBlock, notVerified: notVerifiedEntries } = require('./verify.js');
+const { visionModel, supportsImage } = require('./models.js');
+
+// Runaway guard for verifier turns: characters one model request may stream
+// (reasoning, text and tool arguments) without a tool call. A safety net, not
+// a tuning knob: real verifier requests peak near 9k output tokens (~36k
+// chars); the one runaway seen generated tool arguments to the engine's
+// 128k-token cap over 20 min and ended with an empty call. Set far above any
+// real request so it never cuts legitimate work. Never applied to the
+// implementer, whose planning requests legitimately stream 100k+ chars.
+// (The engine's RPC model options accept only reasoningLevel: no server cap.)
+const VERIFIER_MAX_STREAM_CHARS = 200000;
+
+const RESULT_SCHEMA = 'zcode.result/1';
+const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
+
+class ExecError extends Error {
+  constructor(message, { exitCode, kind }) {
+    super(message);
+    this.exitCode = exitCode;
+    this.kind = kind;
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Settings a session keeps across invocations (stored as invocation.json).
+const SETTING_KEYS = [
+  'kind', 'label', 'cwd', 'model', 'effort', 'timeoutMs', 'maxRepairs', 'checkTimeoutMs',
+  'checks', 'preflight', 'owns', 'ownsDisplay', 'touch', 'touchDisplay', 'acceptanceDeclared', 'mcpSpecs', 'hermetic', 'noBrowser',
+  'skillsDirs', 'noSkills', 'inheritDesktop', 'profile', 'includeReasoning', 'allowOverlap', 'stream',
+];
+
+function settingsOf(inv) {
+  const out = {};
+  for (const k of SETTING_KEYS) if (inv[k] !== undefined) out[k] = inv[k];
+  return out;
+}
+
+function readSettings(id, env) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(store.sessionDir(id, env), 'invocation.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeSettings(id, inv, env) {
+  store.writeJsonAtomic(path.join(store.sessionDir(id, env), 'invocation.json'), settingsOf(inv));
+}
+
+// Joins session/subagents with the per-session agents dir
+// (<home>/.zcode/cli/agents/<parent>/agent_<uuid>/{metadata.json,output.txt}).
+// NOTE (live-pinned): status "success" means the subagent RETURNED, not that
+// its work is correct — the parent's integration checks are the gate.
+async function collectSubagents(client, { sessionId, home }) {
+  const result = await client.request('session/subagents', { sessionId }, { timeoutMs: 15000 });
+  const items = (result && result.ended && result.ended.items) || [];
+  const running = (result && result.running) || [];
+  const agentsDir = path.join(home, '.zcode', 'cli', 'agents', sessionId);
+  const readJson = (f) => {
+    try {
+      return JSON.parse(fs.readFileSync(f, 'utf8'));
+    } catch {
+      return null;
+    }
+  };
+  const subagents = items.map((item) => {
+    const dir = path.join(agentsDir, `agent_${String(item.agentId || '').replace(/^agent_/, '')}`);
+    const metadata = readJson(path.join(dir, 'metadata.json'));
+    let output = null;
+    try {
+      output = fs.readFileSync(path.join(dir, 'output.txt'), 'utf8');
+    } catch {
+      /* not flushed */
+    }
+    return {
+      agentId: item.agentId || (metadata && metadata.agentId) || null,
+      childSessionId: item.childSessionId || (metadata && metadata.childSessionId) || null,
+      profileId: (metadata && metadata.profileId) || item.subagentType || null,
+      title: item.title || (metadata && metadata.description) || null,
+      status: item.status || null,
+      summary: item.summary || null,
+      output,
+      startedAt: item.startedAt || null,
+      endedAt: item.endedAt || null,
+      durationMs: item.startedAt && item.endedAt ? item.endedAt - item.startedAt : null,
+    };
+  });
+  return { subagents, runningCount: running.length };
+}
+
+function sumUsage(turns) {
+  let input = null;
+  let output = null;
+  for (const t of turns) {
+    if (!t.usage) continue;
+    if (typeof t.usage.inputTokens === 'number') input = (input || 0) + t.usage.inputTokens;
+    if (typeof t.usage.outputTokens === 'number') output = (output || 0) + t.usage.outputTokens;
+  }
+  return input === null && output === null ? null : { inputTokens: input, outputTokens: output };
+}
+
+// Model requests and tokens over every turn of an invocation, failed ones
+// included (their usage never arrived: `incomplete`). null = nothing ran.
+function usageOf(turns, failedTurns) {
+  const all = [...turns, ...failedTurns];
+  if (!all.length) return null;
+  const base = sumUsage(turns) || { inputTokens: null, outputTokens: null };
+  const incomplete = all.some((t) => !t.usage);
+  return {
+    ...base,
+    modelRequests: all.reduce((n, t) => n + (t.modelRequests || 0), 0),
+    ...(incomplete ? { incomplete: true } : {}),
+  };
+}
+
+// Running totals across invocations (resumes) kept on the session record.
+function addUsageTotal(prior, usage) {
+  const p = prior || {};
+  const u = usage || {};
+  return {
+    inputTokens: (p.inputTokens || 0) + (u.inputTokens || 0),
+    outputTokens: (p.outputTokens || 0) + (u.outputTokens || 0),
+    modelRequests: (p.modelRequests || 0) + (u.modelRequests || 0),
+  };
+}
+
+function exitCodeFor(result) {
+  switch (result.status) {
+    case 'completed':
+      return 0;
+    case 'unverified':
+      return 9;
+    case 'blocked':
+      return 10;
+    case 'partial':
+      return 8;
+    case 'cancelled':
+      return 130;
+    default: {
+      const kind = result.error && result.error.kind;
+      if (kind === 'timeout') return 124;
+      if (kind === 'no_subagent') return 6;
+      if (kind === 'checks_failed') return 8;
+      if (kind === 'conflict' || kind === 'busy') return 7;
+      return 5;
+    }
+  }
+}
+
+// Claims the id and writes the first record + settings (+ task.json).
+// Used directly by detached starts so the id exists before the worker runs.
+function prepareSession(inv, env = process.env) {
+  const record = store.createSession(inv.id, {
+    kind: inv.kind,
+    label: inv.label || null,
+    cwd: fs.realpathSync(inv.cwd),
+    workspaceRoot: workspaceRoot(inv.cwd),
+    owns: inv.ownsDisplay || [],
+    ownsRoot: inv.owns || [],
+    touch: inv.touchDisplay || [],
+    preflight: Boolean(inv.preflight),
+    checks: inv.checks || [],
+    model: inv.model,
+    effort: inv.effort,
+    engineSessionId: null,
+  }, env);
+  writeSettings(inv.id, inv, env);
+  if (inv.kind === 'task') {
+    store.writeJsonAtomic(path.join(store.sessionDir(inv.id, env), 'task.json'), inv.contract);
+  }
+  return record;
+}
+
+// inv: {kind, id, resume?:{message}, adopt?, cwd, model, effort, timeoutMs,
+//   prompt (run/agent), contract (task), checks, owns, ownsDisplay, …}
+// opts: {onEvent, signal, env, runtime}
+// Returns the result object; throws ConfigError / ExecError / store errors
+// for invocations that never started.
+async function execute(inv, opts = {}) {
+  const env = opts.env || process.env;
+  const emit = opts.onEvent || (() => {});
+  const signal = opts.signal || null;
+  const started = Date.now();
+  const deadline = started + inv.timeoutMs;
+  const runtime = opts.runtime || resolveRuntime(env);
+  const { scrub } = runtime;
+  const id = inv.id;
+  const dir = store.sessionDir(id, env);
+  const home = path.join(dir, 'home');
+  const root = workspaceRoot(inv.cwd);
+
+  // --- record ---------------------------------------------------------------
+  const resuming = Boolean(inv.resume);
+  if (!resuming && !inv.adopt) prepareSession(inv, env);
+  const record = store.readSession(id, env);
+  if (!record) throw new ExecError(`no session "${id}"`, { exitCode: 2, kind: 'not_found' });
+  const busy = () => new ExecError(
+    `session "${id}" is still running (pid ${store.readSession(id, env).pid}). Wait for it or cancel it first.`,
+    { exitCode: 7, kind: 'busy' }
+  );
+  if (resuming && !inv.adopt) {
+    const view = store.viewSession(record);
+    if (view.live && record.pid !== process.pid) throw busy();
+  }
+  // Atomic: exactly one live process drives this session.
+  const releaseOwner = store.claimSession(id, env);
+  if (!releaseOwner) throw busy();
+  let releaseSlot = null;
+  const releaseClaims = () => {
+    if (releaseSlot) releaseSlot();
+    releaseOwner();
+  };
+  // Resuming a preflight session proceeds to the real task: answers + the
+  // full protocol, checks and visual verification from here on.
+  const leavingPreflight = resuming && Boolean(inv.preflight);
+  if (leavingPreflight) inv.preflight = false;
+  const preflight = Boolean(inv.preflight);
+  if (resuming) writeSettings(id, inv, env);
+  if (leavingPreflight) store.updateSession(id, { preflight: false }, env);
+  const isFirstInvocation = !record.engineSessionId;
+  const update = (patch) => store.updateSession(id, patch, env);
+
+  // --- activity relay ---------------------------------------------------------
+  let lastWrite = 0;
+  let toolCalls = record.activity ? record.activity.toolCalls || 0 : 0;
+  let subagentsStarted = record.activity ? record.activity.subagentsStarted || 0 : 0;
+  let modelRequests = record.activity ? record.activity.modelRequests || 0 : 0;
+  let subagentsRunning = 0;
+  let lastTool = null;
+  let lastToolAt = null;
+  let lastEventAt = null;
+  // What the model is doing inside the current request (for `watch`): a long
+  // think streams events for many minutes and is not a stall.
+  let current = null; // {doing: 'thinking'|'writing', since, chars}
+  let requestAt = null;
+  const activity = () => ({
+    toolCalls, subagentsStarted, subagentsRunning, modelRequests, lastTool, lastToolAt,
+    lastEventAt: lastEventAt || new Date().toISOString(),
+    current,
+  });
+  const relay = (ev) => {
+    emit(ev);
+    const now = Date.now();
+    lastEventAt = new Date(now).toISOString(); // any engine event counts as life
+    if (ev.type === 'model_request_started') {
+      modelRequests++;
+      requestAt = new Date(now).toISOString();
+      current = null;
+    }
+    if (ev.type === 'stream' && (ev.kind === 'reasoning_delta' || ev.kind === 'text_delta')) {
+      const doing = ev.kind === 'reasoning_delta' ? 'thinking' : 'writing';
+      if (!current || current.doing !== doing) current = { doing, since: requestAt || new Date(now).toISOString(), chars: 0 };
+      current.chars += typeof ev.delta === 'string' ? ev.delta.length : 0;
+    }
+    if (ev.type === 'tool') {
+      current = null;
+      if (ev.phase === 'started') {
+        toolCalls++;
+        lastTool = ev.name;
+        lastToolAt = new Date(now).toISOString();
+        if (SUBAGENT_TOOLS.has(ev.name)) {
+          subagentsStarted++;
+          subagentsRunning++;
+          emit({ type: 'subagent', phase: 'started', toolCallId: ev.id });
+        }
+      } else if ((ev.phase === 'result' || ev.phase === 'error') && SUBAGENT_TOOLS.has(ev.name)) {
+        subagentsRunning = Math.max(0, subagentsRunning - 1);
+        emit({ type: 'subagent', phase: ev.phase === 'result' ? 'returned' : 'error', toolCallId: ev.id });
+      }
+    }
+    try {
+      if (!(ev.type === 'stream' || ev.type === 'model_request_started' || ev.type === 'state' || ev.type === 'turn')) {
+        store.appendEvent(id, ev, env);
+      }
+      if (now - lastWrite > 1000) {
+        lastWrite = now;
+        update({ activity: activity() });
+      }
+    } catch {
+      /* activity is best-effort; never fail the run over it */
+    }
+  };
+  const setPhase = (phase, detail = {}) => {
+    const ev = { type: 'phase', phase, ...detail };
+    emit(ev);
+    try {
+      store.appendEvent(id, ev, env);
+      lastEventAt = new Date().toISOString();
+      current = null; // a new phase (checks, verifying, repairing) is not the old stream
+      update({ phase, phaseDetail: Object.keys(detail).length ? detail : null, activity: activity() });
+    } catch {
+      /* best-effort */
+    }
+  };
+
+  emit({
+    type: 'session',
+    id,
+    kind: inv.kind,
+    label: inv.label || null,
+    resumed: resuming,
+    cwd: record.cwd,
+    owns: inv.ownsDisplay || [],
+    checks: inv.checks || [],
+    model: inv.model,
+    effort: inv.effort,
+  });
+
+  // --- capacity ---------------------------------------------------------------
+  const maxActive = Number(env.ZAI_CODE_MAX_ACTIVE) || 8;
+  update({ state: 'queued', phase: 'queued', pid: process.pid, status: null });
+  releaseSlot = store.claimSlot(maxActive, env);
+  if (!releaseSlot) {
+    setPhase('queued', { reason: `${maxActive} sessions already running (ZAI_CODE_MAX_ACTIVE)` });
+    while (!releaseSlot && !(signal && signal.aborted) && Date.now() < deadline) {
+      await sleep(1000);
+      releaseSlot = store.claimSlot(maxActive, env);
+    }
+  }
+
+  // --- lease ------------------------------------------------------------------
+  // A preflight is read-only: it reserves nothing and conflicts with nobody.
+  const lease = preflight
+    ? { ok: true, conflicts: [], others: [], release() {} }
+    : acquireLease({ id, root, owns: inv.owns || [], touch: inv.touch || [], allowOverlap: inv.allowOverlap, env });
+  if (!lease.ok) {
+    const names = lease.conflicts
+      .map((c) => `${c.id} (owns ${c.owns && c.owns.length ? c.owns.join(', ') : 'the whole workspace'})`)
+      .join('; ');
+    const message = lease.touch
+      ? `workspace conflict in ${root}: --touch ${(inv.touchDisplay || []).join(', ')} is owned by running session(s) ${names}. ` +
+        'Wait for them, touch something else, or pass --allow-overlap.'
+      : `workspace conflict in ${root}: overlapping ownership with running session(s) ${names}. ` +
+        'Declare disjoint --owns paths, use a separate worktree, wait for them, or pass --allow-overlap.';
+    if (inv.adopt) {
+      // A detached worker: the caller is polling this id, so leave a result.
+      store.writeResult(id, {
+        type: 'result', schema: RESULT_SCHEMA, ok: false, status: 'failed', id, kind: inv.kind,
+        error: { kind: 'conflict', message }, issues: [message],
+      }, env);
+      update({ state: 'finished', phase: 'done', status: 'failed', outcome: { status: 'failed', issues: [message] } });
+    } else if (!resuming) {
+      store.deleteSession(id, env); // the id stays free for a later retry
+    } else {
+      update({ state: 'finished', phase: 'done', status: record.status });
+    }
+    releaseClaims();
+    throw new ExecError(message, { exitCode: 7, kind: 'conflict' });
+  }
+
+  update({ state: 'running', phase: 'starting' });
+  ensureLocalExclude(record.cwd);
+
+  let client = null;
+  let session = null;
+  const turns = [];
+  const vturns = []; // independent verifier turns (never the implementer's)
+  const failedTurns = []; // turns that threw: only their partial facts survive
+  let checks = [];
+  let repairs = 0;
+  let parsed = { handback: null, report: '', error: 'missing' };
+  let error = null;
+  let userInput = null;
+  let subagents = null;
+  let subagentNote = null;
+  let built = null;
+  let before = null;
+  let releasePort = null;
+  let sessionEnv = null;
+  const visualDeclared = (inv.contract && inv.contract.visual) || [];
+  const concurrent = new Map(lease.others.map((o) => [o.id, o.owns || []]));
+  // Sessions that started after us (a parallel plan sibling a few ms later)
+  // are not in lease.others: re-read the live leases before attributing a
+  // change to us or to our verifier.
+  const refreshConcurrent = () => {
+    for (const other of liveLeases(root, env)) {
+      if (other.id !== id) concurrent.set(other.id, other.owns || []);
+    }
+  };
+  const checkTouched = new Set(); // files written by zcode's own check runs and the verifier
+  const verifierEdits = new Set();
+  let verifierModel = null;
+  let verifyRounds = 0;
+  let visualEntries = null; // the verifier's verdicts: authoritative `visual`
+  const invocationStart = new Date(started).toISOString();
+
+  try {
+    if (signal && signal.aborted) throw new TurnError('cancelled', { kind: 'cancelled' });
+    if (!releaseSlot) throw new TurnError('run exceeded --timeout-ms while queued', { kind: 'timeout' });
+
+    // Per-session environment for the executor AND the checks: a port no
+    // other live session holds, plus output and scratch dirs of its own.
+    const reserved = await reservePort({ env, preferred: record.port });
+    if (!reserved) throw new ExecError('no free port for ZCODE_PORT in 41000-48999', { exitCode: 5, kind: 'no_port' });
+    releasePort = reserved.release;
+    const outDir = path.join(record.cwd, '.zcode', 'out', id);
+    const tmpDir = path.join(dir, 'tmp');
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
+    sessionEnv = {
+      ZCODE_SESSION_ID: id,
+      ZCODE_PORT: String(reserved.port),
+      ZCODE_OUT: outDir,
+      ZCODE_TMP: tmpDir,
+    };
+    update({ port: reserved.port, out: outDir, tmp: tmpDir });
+
+    built = buildEngineHome({
+      home,
+      root: rootDir(env),
+      key: runtime.key,
+      live: liveDir(env),
+      mcpSpecs: inv.mcpSpecs || [],
+      hermetic: !!inv.hermetic || env.ZCODE_HERMETIC === '1',
+      browser: !inv.noBrowser,
+      skillsDirs: inv.skillsDirs || [],
+      noSkills: inv.noSkills,
+      inheritDesktop: !!inv.inheritDesktop || env.ZCODE_INHERIT_DESKTOP === '1',
+      profile: inv.profile,
+      model: inv.model,
+    });
+    before = snapshot(root);
+    // Inherited servers that fail to connect: surfaced once in the feed and
+    // remembered, so the next sessions skip them for a while.
+    const reportedMcp = new Set();
+    const rememberMcp = (statuses) => {
+      recordMcpHealth(rootDir(env), statuses, built.mcp.inherited);
+      for (const name of Object.keys(built.mcp.inherited)) {
+        const entry = statuses[name];
+        if (!entry || entry.status !== 'failed' || reportedMcp.has(name)) continue;
+        reportedMcp.add(name);
+        relay({ type: 'mcp', name, status: 'failed', inherited: true, toolCount: null, error: entry.error ? scrub(String(typeof entry.error === 'string' ? entry.error : JSON.stringify(entry.error))).slice(0, 300) : null });
+      }
+    };
+
+    // Open the engine session; retry once on engine timeouts/exits (safe:
+    // nothing has been sent to the model yet).
+    setPhase('starting');
+    for (let attempt = 1; ; attempt++) {
+      client = makeClient(runtime, { home, cwd: record.cwd, sessionEnv });
+      client.start();
+      update({ enginePid: client.child.pid });
+      try {
+        session = await openSession(client, {
+          workspacePath: record.cwd,
+          modelId: inv.model,
+          effort: inv.effort,
+          resumeSessionId: record.engineSessionId || null,
+          requiredMcp: built.mcp.added,
+          onEvent: relay,
+          onMcpStatuses: rememberMcp,
+        });
+        break;
+      } catch (err) {
+        client.kill();
+        const transient = /timeout|exited|failed to start|dead/.test(err.message);
+        if (attempt >= 2 || !transient || (signal && signal.aborted) || Date.now() >= deadline) throw err;
+        relay({ type: 'retry', phase: 'open_session', reason: scrub(err.message).slice(0, 300) });
+      }
+    }
+    update({ engineSessionId: session.sessionId });
+
+    // First prompt for this invocation.
+    let prompt;
+    if (inv.kind === 'task') {
+      const taskPrompt = () => buildTaskPrompt(inv.contract, {
+        ownsDisplay: inv.ownsDisplay || [],
+        session: { id, port: sessionEnv.ZCODE_PORT, out: sessionEnv.ZCODE_OUT, tmp: sessionEnv.ZCODE_TMP },
+        preflight,
+        canSeeImages: supportsImage(inv.model, { env, builtinConfig: runtime.builtinConfig }),
+      });
+      prompt = leavingPreflight
+        ? `${taskPrompt()}\n\n## Answers to your preflight questions\nThe preflight is over: implement the task now (edits are allowed). The orchestrator's answers are binding:\n${(inv.resume.message || '').trim() || '(none: take the most conservative choice for anything open and list it in handback `decisions`)'}`
+        : isFirstInvocation
+        ? taskPrompt() +
+          (resuming && inv.resume.message ? `\n\n## Message from the orchestrator\n${inv.resume.message}` : '')
+        : buildResumePrompt(inv.resume ? inv.resume.message : '', {
+          kind: 'task',
+          // The port is the one thing that may have changed since the first prompt.
+          portChange: record.port && String(record.port) !== sessionEnv.ZCODE_PORT ? sessionEnv.ZCODE_PORT : null,
+        });
+    } else if (inv.kind === 'agent') {
+      prompt =
+        `You MUST use the Agent tool (profileId: "${inv.profile}") to accomplish the ` +
+        `task below — do not do the work yourself. When the subagent finishes, ` +
+        `report its agent id and result.\n\nTask: ${inv.resume ? inv.resume.message : inv.prompt}`;
+    } else {
+      prompt = inv.resume ? buildResumePrompt(inv.resume.message, { kind: 'run' }) : inv.prompt;
+    }
+
+    // One verifier round: a NEW engine session (own client: fresh context,
+    // separate from the implementer's) on the first image-capable model.
+    // Returns an entry per criterion; failures become met:null, never false.
+    const verifyVisual = async (round) => {
+      verifierModel = visionModel({ env, builtinConfig: runtime.builtinConfig });
+      verifyRounds = round;
+      setPhase('verifying', { round });
+      const vprompt = buildVerifierPrompt(inv.contract, {
+        session: { id, port: sessionEnv.ZCODE_PORT, out: sessionEnv.ZCODE_OUT, tmp: sessionEnv.ZCODE_TMP },
+        round,
+      });
+      const preSnap = before ? snapshot(root) : null;
+      let entries = null;
+      let why = 'verifier did not run';
+      for (let attempt = 1; attempt <= 2 && !entries; attempt++) {
+        if ((signal && signal.aborted) || Date.now() >= deadline) break;
+        let vclient = null;
+        let streamed = 0;
+        let runaway = false;
+        const maxStream = Number(env.ZCODE_VERIFIER_MAX_STREAM_CHARS) || VERIFIER_MAX_STREAM_CHARS;
+        const vrelay = (ev) => {
+          relay(ev);
+          if (ev.type === 'model_request_started' || ev.type === 'tool') streamed = 0;
+          else if (ev.type === 'stream' && typeof ev.delta === 'string') {
+            streamed += ev.delta.length;
+            if (streamed > maxStream && !runaway && vclient) {
+              runaway = true;
+              vclient.kill();
+            }
+          }
+        };
+        try {
+          vclient = makeClient(runtime, { home, cwd: record.cwd, sessionEnv });
+          vclient.start();
+          const vsession = await openSession(vclient, {
+            workspacePath: record.cwd,
+            modelId: verifierModel,
+            effort: 'high',
+            requiredMcp: built.mcp.added,
+            onEvent: vrelay,
+            onMcpStatuses: rememberMcp,
+          });
+          const vturn = await runTurn(vclient, vsession, {
+            modelId: verifierModel,
+            effort: 'high',
+            prompt: vprompt,
+            deadline,
+            signal,
+            onEvent: vrelay,
+          });
+          vturns.push(vturn);
+          if (runaway) throw new Error('runaway'); // whatever arrived after the kill does not count
+          const p = parseVisualBlock(vturn.response);
+          if (p.error) why = `the verifier gave no usable zcode-visual block (${p.error})`;
+          else entries = p.entries;
+        } catch (err) {
+          if (err && err.turn) failedTurns.push(err.turn);
+          if (err && (err.kind === 'timeout' || err.kind === 'cancelled')) throw err;
+          why = runaway
+            ? `a verifier request ran away (over ${maxStream} chars streamed without a tool call)`
+            : `verifier failed: ${scrub(err && err.message ? err.message : String(err)).slice(0, 200)}`;
+        } finally {
+          if (vclient) vclient.kill();
+        }
+      }
+      if (preSnap) {
+        refreshConcurrent();
+        const owned = (p) => [...concurrent.values()].some((o) => o.length && isOwned(p, o));
+        for (const f of diffSnapshots(preSnap, snapshot(root)) || []) {
+          if (isZcodePath(f.path) || owned(f.path)) continue;
+          verifierEdits.add(f.path);
+          checkTouched.add(f.path); // verifier edits are an issue, not a task scope violation
+        }
+      }
+      const got = entries || [];
+      const gaps = visualGaps(got, visualDeclared);
+      return [...got, ...notVerifiedEntries(gaps.missing, entries ? 'the verifier did not report it' : why)];
+    };
+
+    let askedForHandback = false;
+    let phase = 'executing';
+    for (;;) {
+      setPhase(phase, phase === 'repairing' ? { attempt: repairs, of: inv.maxRepairs } : {});
+      const turn = await runTurn(client, session, {
+        modelId: inv.model,
+        effort: inv.effort,
+        prompt,
+        deadline,
+        signal,
+        keepReasoning: inv.includeReasoning,
+        onEvent: relay,
+      });
+      turns.push(turn);
+      update({ turns: (record.turns || 0) + turns.length });
+      if (inv.kind !== 'task') break;
+
+      const next = parseHandback(turn.response);
+      // A handback-only follow-up keeps the substantive report from before.
+      parsed = { ...next, report: next.report || parsed.report };
+      if (parsed.error && !askedForHandback && Date.now() < deadline) {
+        askedForHandback = true;
+        prompt = HANDBACK_REQUEST;
+        phase = 'reporting';
+        continue;
+      }
+      if (preflight) break; // read-only: zcode-agent runs nothing
+      if (parsed.handback && parsed.handback.status === 'blocked') break;
+      if (!inv.checks.length && !visualDeclared.length) break;
+
+      if (inv.checks.length) {
+        setPhase('checking', { count: inv.checks.length });
+        const preChecks = before ? snapshot(root) : null;
+        checks = await runChecks(inv.checks, {
+          cwd: record.cwd,
+          env: { ...env, ...sessionEnv },
+          timeoutMs: Math.max(1000, Math.min(inv.checkTimeoutMs, deadline - Date.now())),
+          signal,
+          onEvent: relay,
+        });
+        if (preChecks) {
+          for (const f of diffSnapshots(preChecks, snapshot(root)) || []) checkTouched.add(f.path);
+        }
+        if (Date.now() >= deadline && checks.some((c) => c.timedOut)) {
+          throw new TurnError('run exceeded --timeout-ms during acceptance checks', { kind: 'timeout' });
+        }
+      }
+      const failures = checks.filter((c) => !c.ok);
+      // zcode, not the implementer, judges the visual criteria. Unmet ones
+      // share the repair budget with failing checks; a verifier that could
+      // not run (met:null) is reported, not repaired.
+      let visualUnmet = [];
+      if (visualDeclared.length && !failures.length && parsed.handback
+          && !(signal && signal.aborted) && Date.now() < deadline) {
+        visualEntries = await verifyVisual(verifyRounds + 1);
+        visualUnmet = visualEntries.filter((v) => v.met === false);
+      }
+      if ((!failures.length && !visualUnmet.length) || repairs >= inv.maxRepairs) break;
+      if ((signal && signal.aborted) || Date.now() >= deadline) break;
+      repairs++;
+      prompt = buildRepairPrompt(failures, { attempt: repairs, maxRepairs: inv.maxRepairs, visual: visualUnmet });
+      phase = 'repairing';
+    }
+
+    if (inv.kind === 'task' || inv.kind === 'agent') {
+      try {
+        const collected = await collectSubagents(client, { sessionId: session.sessionId, home });
+        subagents = collected.subagents;
+        if (collected.runningCount) subagentNote = `${collected.runningCount} subagent(s) still running at handback`;
+      } catch (err) {
+        subagentNote = `subagent report unavailable: ${scrub(err.message).slice(0, 200)}`;
+        if (inv.kind === 'agent') throw new TurnError(subagentNote, { kind: 'subagents_rpc' });
+      }
+    }
+  } catch (err) {
+    error = err;
+    if (err && err.turn) failedTurns.push(err.turn);
+  } finally {
+    if (client) client.kill();
+    if (releasePort) releasePort();
+    lease.release();
+    releaseClaims();
+  }
+
+  // --- assemble the handback --------------------------------------------------
+  const cancelled = Boolean(signal && signal.aborted) || (error && error.kind === 'cancelled');
+  if (error && error.kind === 'user_input') {
+    userInput = error.message.replace(/^headless run requested user input: /, '');
+  }
+  refreshConcurrent();
+  // Sessions in this workspace that were active at any point during this
+  // invocation, including ones that finished before us (their leases are
+  // gone): their changes are theirs, not scope violations of ours.
+  for (const other of store.listSessions(env)) {
+    if (other.id === id || other.workspaceRoot !== root || concurrent.has(other.id)) continue;
+    if (String(other.updatedAt) >= invocationStart && Array.isArray(other.ownsRoot)) {
+      concurrent.set(other.id, other.ownsRoot);
+    }
+  }
+  const after = before ? snapshot(root) : null;
+  const diff = before ? diffSnapshots(before, after) : null;
+  const owns = inv.owns || [];
+  const touch = inv.touch || [];
+  const files = (diff || [])
+    .filter((f) => !isZcodePath(f.path))
+    .map((f) => {
+      const owned = isOwned(f.path, owns);
+      // --touch: edits allowed but reported, never a scope violation.
+      const touchedByDesign = !owned && touch.length > 0 && isOwned(f.path, touch);
+      const by = owned || touchedByDesign
+        ? null
+        : [...concurrent.entries()].find(([, o]) => o.length && isOwned(f.path, o));
+      const fromChecks = !owned && !touchedByDesign && !by && checkTouched.has(f.path);
+      return {
+        ...f,
+        owned,
+        ...(touchedByDesign ? { touched: true } : {}),
+        ...(by ? { concurrentSession: by[0] } : {}),
+        ...(fromChecks ? { fromChecks: true } : {}),
+      };
+    });
+  const touched = files.filter((f) => f.touched).map((f) => f.path);
+  const scopeViolations = files
+    .filter((f) => !f.owned && !f.touched && !f.concurrentSession && !f.fromChecks)
+    .map((f) => f.path);
+
+  const handback = parsed.handback;
+  // Preflight is read-only: anything it changed (that no concurrent session
+  // owns) is a protocol breach.
+  const preflightWrote = preflight
+    ? files
+      .filter((f) => ![...concurrent.values()].some((o) => o.length && isOwned(f.path, o)))
+      .map((f) => f.path)
+    : [];
+  let { status, issues } = deriveStatus({
+    kind: inv.kind,
+    error: error && !cancelled && error.kind !== 'user_input' ? error : null,
+    cancelled,
+    userInput,
+    handback,
+    handbackError: parsed.error,
+    checks,
+    scopeViolations: preflight ? [] : scopeViolations,
+    preflight,
+    preflightWrote,
+    visualDeclared,
+    visual: visualEntries || [],
+  });
+
+  let errorOut = null;
+  if (status === 'failed') {
+    if (error && error.kind === 'timeout') {
+      // The work already on disk is kept; resuming continues from it.
+      const plan = /^plan:(\S+)/.exec(inv.label || record.label || '');
+      const cmd = plan ? `zcode-agent plan resume ${plan[1]} "continue"` : `zcode-agent resume ${id} "continue"`;
+      errorOut = {
+        kind: 'timeout',
+        message: `timed out after ${Math.round(inv.timeoutMs / 60000)} min; "${cmd}" picks up from the current files`,
+      };
+    } else if (error) errorOut = { kind: error.kind || 'error', message: scrub(error.message) };
+    else if (preflightWrote.length) errorOut = { kind: 'preflight_wrote', message: issues[0] };
+    else if (checks.some((c) => !c.ok)) errorOut = { kind: 'checks_failed', message: issues[0] };
+  } else if (status === 'cancelled') {
+    errorOut = { kind: 'cancelled', message: 'cancelled' };
+  }
+  if (inv.kind === 'agent' && status === 'completed') {
+    const ok = subagents && subagents.length >= 1 && subagents.every((s) => s.status === 'success');
+    if (!ok) {
+      status = 'failed';
+      const why = !subagents || subagents.length === 0
+        ? 'no subagent was dispatched'
+        : `subagent statuses: ${subagents.map((s) => s.status).join(', ')}`;
+      issues = [why];
+      errorOut = { kind: 'no_subagent', message: why };
+    }
+  }
+
+  const notVerified = [];
+  if (inv.kind === 'task' && preflight) {
+    notVerified.push('preflight: the questions come from reading only; nothing was built, run or checked');
+  } else if (inv.kind === 'task') {
+    if (!inv.checks.length) notVerified.push('no acceptance checks were declared; nothing was executed by zcode-agent to verify the work');
+    if (inv.acceptanceDeclared) notVerified.push('prose acceptance criteria are confirmed only by the executor\'s own report');
+    if (subagents && subagents.length) notVerified.push('subagent "success" means the subagent returned; only the integrated result is verified');
+    if (handback && handback.units.length) {
+      notVerified.push(`unit results are executor claims: ${handback.units.map((u) => `${u.name} ${u.status || '?'}`).join(', ')}; only the integrated result is verified`);
+    }
+    if (visualDeclared.length) {
+      const judged = visualEntries || [];
+      notVerified.push(visualEntries
+        ? `visual criteria judged by an independent ${verifierModel} verifier from its own screenshots (${judged.filter((v) => v.met === true).length} of ${judged.length} met)`
+        : 'visual criteria were not judged: the independent verifier did not run');
+    }
+  }
+  if (before && !diff) notVerified.push('changed files could not be tracked in this workspace');
+  if (subagentNote) issues.push(subagentNote);
+  if (verifierEdits.size) issues.push(`verifier edited files: ${[...verifierEdits].join(', ')}`);
+
+  const last = turns[turns.length - 1] || null;
+  const response = last ? last.response : '';
+  const questions = [...(handback ? handback.questions : [])];
+  if (userInput) questions.push(userInput);
+
+  const usage = usageOf([...turns, ...vturns], failedTurns);
+  const usageTotal = addUsageTotal(record.usageTotal, usage);
+  const result = {
+    type: 'result',
+    schema: RESULT_SCHEMA,
+    ok: status === 'completed',
+    status,
+    id,
+    kind: inv.kind,
+    label: inv.label || null,
+    summary: preflight && status === 'completed'
+      ? 'no open questions'
+      : handback && handback.summary ? handback.summary : '',
+    response: inv.kind === 'task' ? parsed.report : response,
+    issues,
+    questions,
+    unresolved: handback ? handback.unresolved : [],
+    notVerified,
+    changes: {
+      tracking: before ? (diff ? before.kind : 'unavailable') : 'not-started',
+      files,
+    },
+    scopeViolations,
+    touched,
+    ...(preflight ? { preflight: true } : {}),
+    decisions: handback ? handback.decisions : [],
+    visual: visualEntries || [],
+    executorVisual: handback ? handback.visual : [],
+    ...(visualDeclared.length ? { verifier: { model: verifierModel, rounds: verifyRounds } } : {}),
+    units: handback ? handback.units : [],
+    sessionEnv: sessionEnv
+      ? { port: Number(sessionEnv.ZCODE_PORT), out: sessionEnv.ZCODE_OUT, tmp: sessionEnv.ZCODE_TMP }
+      : null,
+    checks: checks.map((c) => ({
+      command: c.command,
+      ok: c.ok,
+      exitCode: c.exitCode,
+      timedOut: c.timedOut,
+      durationMs: c.durationMs,
+      output: scrub(c.output),
+    })),
+    checksPassed: checks.length ? checks.every((c) => c.ok) : null,
+    repairs,
+    handback,
+    subagents,
+    error: errorOut,
+    cwd: record.cwd,
+    workspaceRoot: root,
+    owns: inv.ownsDisplay || [],
+    sessionId: session ? session.sessionId : record.engineSessionId || null,
+    resumed: resuming || Boolean(session && session.resumed),
+    turns: turns.length,
+    model: (last && last.engineModel) || inv.model,
+    modelRequested: inv.model,
+    effort: (last && last.engineReasoningLevel) || inv.effort,
+    effortRequested: inv.effort,
+    mode: session ? session.mode : null,
+    usage,
+    usageTotal,
+    reasoningChars: turns.reduce((n, t) => n + t.reasoningChars, 0),
+    toolCalls: turns.some((t) => typeof t.toolCallCount === 'number')
+      ? turns.reduce((n, t) => n + (t.toolCallCount || 0), 0)
+      : null,
+    toolEvents: turns.reduce((n, t) => n + t.toolEvents, 0),
+    mcpServers: built ? Object.keys(built.mcp.servers) : [],
+    skillsInjected: built ? built.skillsInjected : [],
+    terminalStatus: last ? last.terminalStatus : null,
+    streamingEvents: turns.reduce((n, t) => n + t.streamingEvents, 0),
+    durationMs: Date.now() - started,
+    files: {
+      session: dir,
+      result: path.join(dir, 'result.json'),
+      events: path.join(dir, 'events.ndjson'),
+    },
+  };
+  if (inv.includeReasoning) result.reasoning = turns.map((t) => t.reasoningText).join('');
+
+  store.writeResult(id, result, env);
+  store.appendEvent(id, { type: 'result', status }, env);
+  update({
+    state: 'finished',
+    phase: 'done',
+    status,
+    usageTotal,
+    phaseDetail: null,
+    activity: activity(),
+    outcome: {
+      status,
+      summary: result.summary,
+      issues: issues.slice(0, 5),
+      checksPassed: result.checksPassed,
+      changedFiles: files.length,
+      durationMs: result.durationMs,
+    },
+  });
+  return result;
+}
+
+module.exports = { execute, prepareSession, exitCodeFor, ExecError, readSettings, RESULT_SCHEMA };

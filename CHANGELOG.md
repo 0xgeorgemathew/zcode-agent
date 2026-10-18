@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.0.0
+
+Renamed to **zcode-agent** (npm `zcode-agent`, command `zcode-agent`, `npx zcode-agent …`), and it now runs anywhere: with the ZCode app it needs no login, without it the engine ships as a dependency. Everything else (task contracts, the independent verifier, plans, briefs) is unchanged. 0.7.0 and 0.7.1 were never published under the old name; their changes ship here.
+
+### Changed
+
+- **Name.** Package `@0xgeorgemathew/zcode` → `zcode-agent`; command `zcode` → `zcode-agent` (no longer shadows upstream's own `zcode`); state `~/.zcode-cli` → `~/.zcode-agent`, moved on first run with a symlink left behind so pre-1.0 session paths still resolve. The repo is an npm workspace: `packages/cli` (zcode-agent) and `packages/engine` (@zcode-agent/engine).
+- **No login with the ZCode app.** The key comes from `ZAI_API_KEY`, then `zcode-agent login`, then the app's own Z.ai API key, read in place (`ZCODE_NO_DESKTOP_KEY=1` turns it off). OAuth tokens are never read.
+- **The app's MCP servers and skills are inherited by default** (0.7.1 was hermetic). Left out: OAuth-only remote servers (no headers, no key in the URL, not a known public endpoint), which can't sign in headless. Skills that are symlinks are followed; the orchestrator's own `zcode`/`zcode-agent` skill is never given to the executor. `--hermetic` (or `ZCODE_HERMETIC=1`) restores the 0.7.1 set; `--mcp-inherit` is accepted and does nothing. Plugins, agent profiles and the global `AGENTS.md` still need `--inherit-desktop`.
+- **One dead MCP server no longer stalls every session.** The engine answers no RPC until its MCP connect settles (live-probed: one unreachable server held `session/send` for its full 30 s timeout, failing the run). The connect is now awaited, and inherited servers that fail are recorded in `~/.zcode-agent/mcp-health.json` and skipped for six hours (at once retried if their definition changes). Failures show in the feed as `mcp <name> failed`.
+- **Executor instructions ship with the package** (`assets/executor-agents.md`, the session's `AGENTS.md`): headless rules, `$ZCODE_PORT`/`$ZCODE_OUT`/`$ZCODE_TMP`, no external side effects, and when to fan out to subagents (disjoint files only) or keep work in one agent. With `--inherit-desktop` the app's `AGENTS.md` is appended.
+- **Standalone.** `@zcode-agent/engine` 0.16.9 is the headless ZCode engine built unmodified from zai-org/ZCode v3.15.1 (`npm run build:engine`; ~5 MB tarball with the app's content plugins and upstream's LICENSE/NOTICE). It is preferred over the app's engine; `ZAI_CODE_ENGINE` still overrides. App engine paths for Windows and Linux are probed too. Without the app, a pinned headless Playwright server (`@playwright/mcp@0.0.83 --isolated --headless --browser chromium`) serves the executor and the verifier; `zcode-agent doctor --install-browser` installs its Chromium.
+- **Standalone provider config fixed.** Without an app config to copy, the synthesized `provider_config.json` lacked `modelConfigRules`, and the engine then registered no zai-api model (`session/create`: "Provider Registry 中不存在 Model: zai-api/GLM-5.3-Flash"). Verified end to end on a clean install with no ZCode app: a task with a visual criterion completed, verifier 4/4, $0.02.
+- **Never interactive.** `login` refuses a terminal on stdin (pipe the key instead).
+- **`doctor`** reports the key source, which engine runs (and the tested version), the inherited MCP servers and those skipped, inherited skills and the browser; exits 1 on node < 22.13 (the engine's `node:sqlite`).
+- **Skills** (`zcode-agent skills install` replaces a pre-1.0 `zcode` skill): a Parallelizing section — units inside one session first, parallel sessions only for independent deliverables with disjoint paths, shared files owned by a scaffold, dependencies installed once, 2–4 concurrent sessions, and when not to split.
+- Node ≥ 22.13 (was ≥ 20).
+
+### Measured (trivial `run`, this machine: 9 inherited MCP servers, 111 skills)
+
+| | first-request input | wall |
+|---|---|---|
+| `--hermetic` (0.7.1 set) | 17.4k tokens | 9 s |
+| inherited MCP servers, no skills | 32.4k tokens | — |
+| inherited MCP servers and skills | 37.1k tokens | 10 s (45 s the first time, with one unreachable server) |
+
+Inherited tools are re-sent with every request (mostly from cache): on a large desktop setup that is the cost of no setup. Trim the app's MCP servers, or pass `--hermetic`, when it matters.
+
 ## 0.7.1
 
 Hermetic executor. The engine DBs of the White Credit v3 plan showed the CLI's long sessions were not a CLI-vs-desktop speed gap (same engine, same SQLite writes; engine start ~1 s, MCP connect ~1.4 s, all inter-request gaps 2.6–8.6 min of 50–94) but a handful of requests: in scaffold, landing and apply, 2–6 requests of 13–21 min each took 29–48% of model time, each drafting the whole build in its reasoning (176k chars, 188 code blocks in one) and re-arguing the desktop's `AGENTS.md` ("I must read CLOUDFLARE.md…") against the contract.

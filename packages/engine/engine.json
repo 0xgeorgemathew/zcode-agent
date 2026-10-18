@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/zai-org/ZCode.git",
+  "tag": "v3.15.1",
+  "engineVersion": "0.16.9",
+  "buildNode": "24.14.0",
+  "pnpm": "10.33.2",
+  "plugins": [
+    "bundled-skills",
+    "documents-plugin",
+    "pdf-plugin",
+    "presentations-plugin",
+    "spreadsheets-plugin",
+    "visualize-plugin",
+    "image-search-plugin",
+    "plugin-creator-plugin",
+    "skill-creator-plugin",
+    "zcode-guide-plugin",
+    "restore-legacy-sessions-plugin"
+  ]
+}

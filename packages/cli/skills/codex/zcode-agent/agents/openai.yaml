@@ -1,0 +1,4 @@
+interface:
+  display_name: "zcode-agent executor"
+  short_description: "Delegate scoped, verified work to zcode-agent"
+  default_prompt: "Use $zcode-agent to implement this scoped change in a verified zcode-agent session and report its handback."

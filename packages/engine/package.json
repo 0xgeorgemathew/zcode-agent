@@ -1,0 +1,27 @@
+{
+  "name": "@zcode-agent/engine",
+  "version": "0.16.9",
+  "description": "The headless ZCode engine (zcode.cjs 0.16.9), built unmodified from zai-org/ZCode v3.15.1 for zcode-agent. Not affiliated with Z.ai.",
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "files": [
+    "index.js",
+    "engine.json",
+    "dist",
+    "LICENSE",
+    "NOTICE.md",
+    "README.md"
+  ],
+  "scripts": {
+    "prepack": "node -e \"require('node:fs').accessSync(require('./index.js').enginePath)\" || (echo 'engine not built: run npm run build:engine at the repo root' >&2; exit 1)"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xgeorgemathew/zcode-agent.git",
+    "directory": "packages/engine"
+  },
+  "homepage": "https://github.com/0xgeorgemathew/zcode-agent/tree/main/packages/engine#readme"
+}

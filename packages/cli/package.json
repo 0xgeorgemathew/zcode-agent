@@ -1,0 +1,54 @@
+{
+  "name": "zcode-agent",
+  "version": "1.0.0",
+  "description": "Cheap, verified execution for Claude Code and Codex: your orchestrator decides, GLM-5.3-Flash builds, tests and visually verifies in headless ZCode sessions (parallel sessions, subagents, dependency plans) and hands back a compact result. Uses your ZCode app's key, MCP servers and skills, or runs standalone.",
+  "license": "MIT",
+  "bin": {
+    "zcode-agent": "bin/zcode-agent.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "assets",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@zcode-agent/engine": "0.16.9"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 \"test/unit/*.test.js\"",
+    "test:live": "node --test --test-concurrency=1 \"test/live/*.test.js\"",
+    "prepack": "node ../../scripts/sync-package-docs.mjs",
+    "accept:flash": "node scripts/accept.js flash",
+    "accept:subagent": "node scripts/accept.js subagent",
+    "accept:53": "node scripts/accept.js glm53"
+  },
+  "keywords": [
+    "glm",
+    "glm-5.3",
+    "zai",
+    "zcode",
+    "claude-code",
+    "codex",
+    "orchestrator",
+    "executor",
+    "coding-agent",
+    "subagent",
+    "headless",
+    "mcp"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xgeorgemathew/zcode-agent.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/0xgeorgemathew/zcode-agent#readme",
+  "bugs": {
+    "url": "https://github.com/0xgeorgemathew/zcode-agent/issues"
+  }
+}

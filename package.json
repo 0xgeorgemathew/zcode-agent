@@ -1,52 +1,17 @@
 {
-  "name": "@0xgeorgemathew/zcode",
-  "version": "0.7.1",
-  "description": "Lean GLM-5.3-Flash executor for orchestrator agents: task contracts, parallel sessions and plans, zcode-run checks, an independent vision verifier, live watch with cost, structured handbacks. Wraps the ZCode engine. Zero dependencies.",
-  "license": "MIT",
-  "private": false,
-  "bin": {
-    "zcode": "bin/zcode.js"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "files": [
-    "bin",
-    "lib",
-    "skills",
-    "README.md",
-    "LICENSE"
+  "name": "zcode-agent-workspace",
+  "private": true,
+  "workspaces": [
+    "packages/engine",
+    "packages/cli"
   ],
   "scripts": {
-    "test": "node --test --test-concurrency=1 \"test/unit/*.test.js\"",
-    "test:live": "node --test --test-concurrency=1 \"test/live/*.test.js\"",
-    "prepublishOnly": "npm test && npm run test:live",
-    "accept:flash": "node scripts/accept.js flash",
-    "accept:subagent": "node scripts/accept.js subagent",
-    "accept:53": "node scripts/accept.js glm53"
+    "test": "npm test --workspace zcode-agent",
+    "test:live": "npm run test:live --workspace zcode-agent",
+    "build:engine": "node scripts/build-engine.mjs",
+    "release:check": "node scripts/release-check.mjs"
   },
-  "keywords": [
-    "glm",
-    "glm-5.3",
-    "zai",
-    "zcode",
-    "cli",
-    "coding-agent",
-    "agent",
-    "llm",
-    "mcp",
-    "subagent",
-    "headless",
-    "ndjson",
-    "orchestrator",
-    "executor"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/0xgeorgemathew/zcode.git"
-  },
-  "homepage": "https://github.com/0xgeorgemathew/zcode#readme",
-  "bugs": {
-    "url": "https://github.com/0xgeorgemathew/zcode/issues"
+  "engines": {
+    "node": ">=22.13"
   }
 }
