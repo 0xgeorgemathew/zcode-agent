@@ -1,354 +1,360 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/hero.svg" alt="Run sheet of a real four-session zcode-agent plan: scaffold, then landing and apply in parallel, then integration. Each bar is build time followed by verifier time. GLM cost per session $0.50, $0.69, $0.95 and $0.81; the Opus orchestrator cost $2.17 and 779 Flash requests cost $2.95." width="960">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/hero-dark.svg">
+    <img src="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/hero-light.svg" width="960" alt="Your agent (Claude Code, Codex or any agent with a shell) writes the decisions and a task contract. zcode-agent runs parallel GLM-5.3-Flash sessions that build, run their own checks, repair failures and have a fresh session judge screenshots. One handback line returns to your agent.">
+  </picture>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/zcode-agent"><img src="https://img.shields.io/npm/v/zcode-agent.svg?color=2E2A7A&label=npm" alt="npm version"></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A522.13-2E2A7A" alt="node 22.13 or later">
-  <img src="https://img.shields.io/badge/dependencies-engine%20only-2E2A7A" alt="one dependency: the engine">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2E2A7A" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/model-GLM--5.3--Flash-1C7C54" alt="runs on GLM-5.3-Flash">
+  <a href="https://github.com/0xgeorgemathew/zcode-agent/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-2E2A7A" alt="MIT license"></a>
 </p>
 
-**zcode-agent lets an expensive model decide and a cheap one build.** Claude Code or Codex writes the decisions and a task contract; zcode-agent implements it with GLM-5.3-Flash, runs your checks itself, has a second Flash session that never saw the code screenshot and judge the UI, repairs what fails, and hands back one short line of evidence. The orchestrator spends its tokens on decisions and exceptions, nothing else.
+# zcode-agent
 
-| who | does | never does |
+zcode-agent is a command-line executor for any agent that can run a shell command: Claude Code, Codex, or your own. Your agent writes the decisions and a task contract. zcode-agent builds it with GLM-5.3-Flash, runs your checks itself, repairs what fails, and has a separate Flash session that never saw the code look at screenshots of the result. It returns one line of JSON. Your agent never reads the diff, re-runs the tests or opens a screenshot, so its expensive tokens go to decisions and exceptions.
+
+| | does | never does |
 |---|---|---|
-| **Orchestrator** (Opus, Codex, any agent with a shell) | product, design and logic decisions; shapes the work into sessions; answers questions | writes code, re-runs checks, looks at screenshots |
-| **zcode-agent implementer** (GLM-5.3-Flash) | builds inside `--owns`, uses subagents for units, fixes failing checks | invents anything user-visible the decisions left open, commits, deploys |
-| **zcode-agent verifier** (a fresh Flash session) | serves the app, screenshots every viewport, quotes the text it can actually read, judges each criterion | edits files, trusts the DOM over the pixels |
-
-The run above was a real one: a one-page site with an apply flow, four sessions, every check and all 36 visual criteria passing on the first verifier round. Your own numbers are one command away:
-
-```text
-$ zcode-agent cost ~/projects/white-credit
-zcode-agent session  status     model          req  input  cached  output   cost
-wc3-integration      completed  GLM-5.3-Flash  235  24.6M   24.3M   72.8k  $0.81
-wc3-apply            completed  GLM-5.3-Flash  201  26.5M   26.0M  177.7k  $0.95
-wc3-landing          completed  GLM-5.3-Flash  209  15.6M   14.9M  274.9k  $0.69
-wc3-scaffold         completed  GLM-5.3-Flash  134  13.6M   13.2M   99.0k  $0.50
-
-total  4 sessions  779 requests  80.3M input (78.4M cached)  624.4k output  $2.95
-```
-
-The same brief built earlier on GLM-5.3 cost $20 to $35 a run in GLM alone. Agent loops re-send their context on every request, so 97% of input is cached; zcode-agent prices cached input separately (Z.ai list price, `ZCODE_PRICES` overrides).
+| **Your agent** | product, design and logic decisions; splits the work; answers questions | writes code, re-runs checks, looks at screenshots |
+| **zcode-agent** (GLM-5.3-Flash) | builds inside the paths it owns, runs subagents in parallel, runs the checks, fixes failures | invents anything user-visible the decisions left open, commits, deploys |
+| **The verifier** (a fresh Flash session) | serves the app, screenshots every viewport, quotes the text it can read, judges each criterion | edits files, trusts the DOM over the pixels |
 
 &nbsp;
 
 ## Quick start
 
 ```sh
-npx zcode-agent doctor               # engine, key, MCP servers, skills, browser
-npx zcode-agent skills install       # teach Claude Code and Codex to delegate to zcode-agent
+# check engine, key, MCP, browser
+npx zcode-agent doctor
 
-npx zcode-agent task --check "npm test" "Fix the off-by-one in src/paginate.ts"
+# teach Claude Code and Codex
+npx zcode-agent skills install
+
+# or hand it a task yourself
+npx zcode-agent task \
+  --check "npm test" \
+  "Fix the off-by-one in paginate.ts"
 ```
 
-Or install it once: `npm install -g zcode-agent`, then drop the `npx`. Node 22.13 or later.
+To skip `npx`, install it once with `npm install -g zcode-agent`. It needs Node 22.13 or later.
 
-**With the ZCode app installed** there is nothing to set up: zcode-agent uses the app's Z.ai API key (read in place, never copied or printed), its MCP servers and its skills. OAuth-only remote MCP servers are left out, because a headless session can't sign in; servers that fail to connect are skipped for six hours. The app's plugins, agent profiles and your global `AGENTS.md` stay out unless you pass `--inherit-desktop`; `--hermetic` leaves out the app's MCP servers and skills too.
+**With the ZCode app installed, there is nothing to configure.** zcode-agent reads the app's Z.ai API key where it is stored (it never copies or prints it) and gives every session the app's MCP servers and skills. It leaves out remote MCP servers that sign in with OAuth, because a headless session can't complete the sign-in, and it skips a server that failed to connect for the next six hours. The app's plugins, agent profiles and your global `AGENTS.md` stay out unless you pass `--inherit-desktop`. `--hermetic` leaves out the app's MCP servers and skills as well.
 
-**Without the app**, give it a Z.ai API key and a browser for visual checks:
+**Without the app**, set an API key and install a browser for visual checks:
 
 ```sh
-export ZAI_API_KEY=…                          # or: printf %s "$KEY" | zcode-agent login
-npx zcode-agent doctor --install-browser      # Chromium for the default headless Playwright server
+# the key, in the environment
+export ZAI_API_KEY=...
+# or stored once
+printf %s "$KEY" \
+  | npx zcode-agent login
+
+# Chromium for visual checks
+npx zcode-agent doctor \
+  --install-browser
 ```
 
-The engine itself ships with the package: `@zcode-agent/engine` is the headless ZCode engine built unmodified from the Apache-2.0 [zai-org/ZCode](https://github.com/zai-org/ZCode) source, pinned to the version zcode-agent is tested with. Every session also gets zcode-agent's own executor instructions as its `AGENTS.md`: headless rules, the session's port and output dirs, and when to split work across subagents.
+The engine comes with the package. `@zcode-agent/engine` is the headless ZCode engine, built unmodified from the Apache-2.0 source of [zai-org/ZCode](https://github.com/zai-org/ZCode) and pinned to the version zcode-agent is tested with.
 
-`zcode-agent skills install` puts the Claude Code skill in `~/.claude/skills/zcode-agent` and the Codex skill in `${CODEX_HOME:-~/.codex}/skills/zcode-agent`, and removes a pre-1.0 `zcode` skill (`zcode-agent skills install claude | codex` for one, `zcode-agent skills` to see what is installed, `zcode-agent skills uninstall` to remove). The package runs no install scripts. Details are in [`skills/`](packages/cli/skills/README.md).
+`zcode-agent skills install` copies the Claude Code skill to `~/.claude/skills/zcode-agent` and the Codex skill to `${CODEX_HOME:-~/.codex}/skills/zcode-agent`, and removes a pre-1.0 `zcode` skill if it finds one. Pass `claude` or `codex` to install one of them. `zcode-agent skills` shows what is installed and `zcode-agent skills uninstall` removes both. The package runs no install scripts. The skills themselves are in [`packages/cli/skills`](https://github.com/0xgeorgemathew/zcode-agent/blob/main/packages/cli/skills/README.md).
 
 &nbsp;
 
-## The loop
+## How a task runs
 
-With the skill installed, the orchestrator works in four steps, and only the first is expensive:
+With the skill installed, your agent works in four steps. Only the first one costs much.
 
-1. **Decide.** Read the repo, then write every user-visible and behavioural decision down once (`docs/decisions.md`: palette, copy, motion, validation rules, storage keys) as dense statements.
-2. **Shape.** One session by default. `--unit`s when one deliverable has separable parts that share context (the executor runs a subagent per unit), parallel `--detach`ed sessions when independent deliverables own disjoint paths, a `zcode-agent plan` when there are dependencies. Splitting is optional and only pays when the work really splits; the skill spells out when.
-3. **Dispatch and wait.** One background `zcode-agent wait` or `zcode-agent plan wait`; no polling.
-4. **Handle exceptions.** `completed` needs nothing. Anything else comes with the questions, failing check tail or unmet criterion, answered with a one-line `zcode-agent resume`.
+1. **Decide.** Read the repo, then write down every user-visible and behavioural decision once, as short statements in a file such as `docs/decisions.md`: palette, copy, motion, validation rules, storage keys.
+2. **Shape.** Pick one session, one session with units, parallel sessions, or a plan. The next section says which.
+3. **Dispatch and wait.** One background `zcode-agent wait` or `zcode-agent plan wait`, with no polling.
+4. **Handle exceptions.** A `completed` session needs nothing. Any other status comes with the questions, the tail of the failing check, or the unmet criterion, and your agent answers with a one-line `zcode-agent resume`.
 
-While it runs, you (not the orchestrator) can watch it:
+You can watch sessions while they run. Your agent doesn't need to.
 
 ```text
-$ zcode-agent watch --plan plan
-wc3-scaffold     completed  51m  last: Read 8m ago  req 133  sub 0  $0.50
-wc3-landing      running verifying round 1  1h12m  last: Read 4s ago  req 154  sub 0  $0.61
-wc3-apply        running executing  1h12m  last: Edit 12s ago  req 188  sub 0  $0.83
-wc3-integration  queued  0s  last: -  req 0  sub 0
-total  $1.94  (3 sessions, Z.ai list price)
+$ zcode-agent watch
+api-auth       completed  22m  last: Bash 3m ago  req 61  sub 0  $0.09
+settings-page  running verifying round 1  31m  last: Read 4s ago  req 84  sub 2  $0.14
+billing-page   running executing  31m  last: Edit 12s ago  req 77  sub 3  $0.12
+total  $0.35  (3 sessions, Z.ai list price)
 ```
 
-While a model request streams, the line says so (`thinking 12m 40k chars`), so a long think does not look stuck. `STALLED?` is appended when a running session has had no engine event at all for 8 minutes (`--stall-min`). Nothing is done automatically.
+The line says `thinking` while a model request streams, so a long request doesn't look stuck. A running session with no engine event for 8 minutes gets `STALLED?` (`--stall-min` changes the threshold). Nothing happens automatically.
+
+&nbsp;
+
+## Split work only when it splits
+
+Parallel work can cut wall time, and it is always optional. One well-specified session is correct for most tasks.
+
+| the work | shape |
+|---|---|
+| small, or tightly coupled | **one session** |
+| one deliverable with separable parts that share decisions | **one session with units**: a `--unit` per part, each run by a subagent, integrated by the session |
+| independent deliverables that own different paths | **parallel sessions**: `--detach` each, then one `wait` on all of them |
+| a shared base first, then parallel features | **a plan**: `plan run plan.json`, with `after` for the order |
+
+Split only when every concurrent session owns different paths, one session owns the shared files (`package.json`, lockfiles, router, global styles) and installs every dependency up front, and no piece waits on a decision another piece will make. Two to four sessions at a time is the useful range. More sessions compete for the API rate limit and your machine. zcode-agent refuses overlapping ownership with exit 7, and every session gets its own `ZCODE_PORT`, `ZCODE_OUT` and `ZCODE_TMP` so dev servers and build output don't collide.
 
 &nbsp;
 
 ## Hand off a task
 
 ```sh
-zcode-agent task --cwd ./site --id page-1 \
+zcode-agent task --cwd ./site --id pricing \
   --owns src/pages/pricing/ \
   --check "npm run build" --check "npm test -- pricing" \
-  --accept "Three plan cards, the middle one highlighted" \
-  --context @design/pricing.md \
-  "Implement the pricing page from the supplied design notes"
+  --decisions @docs/decisions.md \
+  --visual "all three plan cards are readable side by side at 1440 and stacked at 390" \
+  "Build the pricing page"
 ```
 
-zcode-agent turns this into an execution contract and runs a fresh engine session in yolo mode, with `--cwd` as the blast radius. The model may split the work across subagents. When it finishes, **zcode-agent runs the checks itself**. If a check fails, zcode-agent feeds the failure output back for a bounded number of repair turns (`--max-repairs`, default 2), then reports:
+zcode-agent turns the flags into a task contract and runs a fresh engine session with `--cwd` as the limit of what it may touch. The executor may split the work across subagents. When it finishes, zcode-agent runs the checks itself and feeds any failure back for up to two repair turns (`--max-repairs`). With `--visual`, a fresh session then serves the app, screenshots it and judges each criterion. The summary looks like this:
 
 ```text
-✓ completed  page-1  142.3s
-  Pricing page with three plan cards; middle card highlighted per design notes.
+✓ completed  pricing  552.3s
+  Pricing page with three plan cards; the middle card is highlighted.
 changed  3 files
   A src/pages/pricing/index.tsx
   A src/pages/pricing/PlanCard.tsx
   M src/pages/pricing/styles.css
-checks   2/2 passed  ·  1 repair turn
+checks   2/2 passed
   ✓ npm run build
   ✓ npm test -- pricing
-not verified
-  - prose acceptance criteria are confirmed only by the executor's own report
+visual
+  - met all three plan cards are readable side by side at 1440 and stacked at 390 @1440x900
+  - met all three plan cards are readable side by side at 1440 and stacked at 390 @390x844
 ```
 
-That summary goes to stdout; the live feed (session header, phases, tools, subagents, check results) goes to stderr. With `--json` you get the compact brief as one machine-readable result line (see [Machine interface](#machine-interface)). For small work the objective alone is enough: `zcode-agent task "Fix the typo in the README heading"`.
+The summary goes to stdout and the live feed (phases, tools, subagents, check results) to stderr. With `--json` you get one machine-readable result line instead (see [Machine interface](#machine-interface)). For a small fix the objective alone is enough: `zcode-agent task "Fix the typo in the README heading"`.
 
 ### What a status means
 
 | status | meaning | exit |
 |---|---|---|
-| `completed` | zcode-agent's own checks ran and passed, the executor reports done, no unmet criteria, nothing changed outside `--owns` | 0 |
-| `unverified` | executor reports done, but no checks were declared (or no usable handback), so completion is self-reported | 9 |
-| `partial` | work remains: executor says partial, a criterion is unmet, or files changed outside the owned scope | 8 |
-| `blocked` | needs the orchestrator: `questions` lists what is missing | 10 |
-| `failed` | checks still failing after the repair budget (`error.kind: checks_failed`, exit 8), engine/turn error (5), or timeout (124) | 5 / 8 / 124 |
-| `cancelled` | stopped by `zcode-agent cancel`, Ctrl-C, or SIGTERM | 130 |
+| `completed` | zcode-agent's own checks passed, the executor reports done, no criterion is unmet and nothing changed outside `--owns` | 0 |
+| `unverified` | the executor reports done, but there were no checks to run, so nothing confirms it | 9 |
+| `partial` | work remains: the executor says so, a criterion is unmet, or files changed outside the owned paths | 8 |
+| `blocked` | the executor needs an answer; `questions` lists them with options and a recommendation | 10 |
+| `failed` | checks still fail after the repair turns (8), the engine or turn failed (5), or it timed out (124) | 5, 8, 124 |
+| `cancelled` | stopped by `zcode-agent cancel`, Ctrl-C or SIGTERM | 130 |
 
-A model claiming success is never enough on its own. A subagent ending `success` only means it returned. The handback block the model writes is reported as `handback` (a claim), and the status is derived from what zcode-agent observed. `notVerified` lists anything zcode-agent could not check itself.
+zcode-agent derives the status from what it observed, not from what the model claims. The model's own report is kept as `handback`, and `notVerified` lists anything zcode-agent could not check itself.
 
 ### The contract
 
-Flags cover the common fields. For richer handoffs, pass `--task contract.json`, `--task brief.md`, or `--task -` to read stdin. Only `objective` is required; unknown keys are rejected so a typo never silently drops a requirement.
+Flags cover the common fields. For a larger handoff, pass `--task contract.json`, `--task brief.md`, or `--task -` to read stdin. Only `objective` is required, and zcode-agent rejects unknown keys so a typo never drops a requirement silently.
 
 ```json
 {
-  "objective": "Implement page 2 (Team) per the design spec",
-  "scope": ["Team page route and its components"],
-  "constraints": ["No new dependencies", "Keep existing routing untouched"],
-  "decisions": ["Grid of 3 columns ≥1024px, 1 column below", "Use tokens from src/theme.ts only"],
-  "acceptance": ["Every member card shows name, role, avatar"],
+  "objective": "Implement the Team page per the design spec",
+  "decisions": ["Grid of 3 columns at 1024px and wider, 1 column below", "Use tokens from src/theme.ts only"],
+  "constraints": ["No new dependencies"],
+  "acceptance": ["Every member card shows name, role and avatar"],
   "checks": ["npm run build", "npm test -- team"],
   "visual": ["every member's name and role is readable at 390 and 1440"],
-  "files": ["src/theme.ts", "src/pages/home/index.tsx"],
-  "references": ["design/team.png described in design/team.md"],
+  "files": ["src/theme.ts"],
   "context": ["Copy lives in content/team.json"],
   "owns": ["src/pages/team/**", "content/team.json"],
-  "limits": { "timeoutMs": 7200000, "maxRepairs": 2, "checkTimeoutMs": 300000 },
+  "units": [{ "name": "cards", "objective": "Member card component", "owns": ["src/pages/team/Card.tsx"] }],
+  "limits": { "timeoutMs": 7200000, "maxRepairs": 2 },
   "effort": "high"
 }
 ```
 
-**Decisions** (`--decision "…"`, repeatable, and `--decisions @file`; `design` is an alias) are presented as binding: the executor implements them and does not revisit them. `@file` entries inside contract `decisions`/`context` lists are inlined (relative to the contract file, then to `--cwd`; the error names both paths). If something user-visible or behavioural is left open, the executor does not guess: when it blocks the work it reports `blocked` with a structured question `{"q", "options": [...], "recommend"}`; otherwise it takes the most conservative choice and lists it in the handback `decisions: [{what, why}]`, which the brief carries so the orchestrator can overrule it. A file passed with `--file` and also inlined with `--context @file` reaches the executor once; identical context and acceptance entries are deduped.
+<details>
+<summary><b>Decisions, preflight, units and the verifier in detail</b></summary>
 
-**Preflight.** `--preflight` runs a read-only turn over the same contract: the executor lists every open question it would otherwise guess and makes no edits; zcode-agent runs no checks. The result is `blocked` with `questions`, or `completed` with summary `no open questions`; any changed file fails it (`preflight_wrote`). `zcode-agent resume <id> "<answers>"` then switches the session to execution with the full task protocol, checks and visual verification. It costs the orchestrator a round trip, so it pays off only when the decisions have known gaps.
+&nbsp;
 
-**Units.** `--unit "name: objective [owns a,b]"` (repeatable; contract `units: [{name, objective, owns?}]`) makes the executor dispatch each unit to its own subagent inside this one session, in parallel where independent, then integrate and verify the whole. Unit `owns` must lie within the session's `--owns` and be disjoint from each other (exit 2 otherwise). The handback `units: [{name, status, note}]` is listed under `notVerified` as executor claims; zcode-agent's checks still verify the integrated result.
+**Decisions** (`--decision "…"`, repeatable, or `--decisions @file`) are binding. The executor implements them and does not revisit them. When something user-visible or behavioural is still open, the executor does not guess. If the gap blocks the work, it reports `blocked` with a structured question `{"q", "options", "recommend"}`. Otherwise it takes the most conservative choice and lists it under `decisions: [{what, why}]` in the handback, so your agent can overrule it. `@file` entries in contract `decisions` and `context` are read relative to the contract file, then to `--cwd`.
 
-### Visual verification
+**Preflight.** `--preflight` runs a read-only turn over the same contract. The executor lists every question it would otherwise guess and changes no files. The result is `blocked` with `questions`, or `completed` with the summary `no open questions`. `zcode-agent resume <id> "<answers>"` then switches the session to execution. It costs your agent a round trip, so use it when the decisions have known gaps.
 
-`--visual "criterion"` (repeatable; contract `visual`), `--viewport WxH` (repeatable, default `390x844` and `1440x900`; contract `viewports`) and `--serve "cmd"` (contract `serve`; must honour `$ZCODE_PORT`, default: the executor reads `package.json`) make zcode-agent, not the implementer, judge the rendered result. Phrase criteria as what must be readable: "hero headline 'Your money, simplified' is fully readable at 390 and 1440".
+**Units.** `--unit "name: objective [owns a,b]"` (repeatable, or contract `units`) makes the executor give each unit its own subagent inside the one session, in parallel where they are independent, then integrate and verify the whole. Unit paths must lie inside the session's `--owns` and must not overlap each other (exit 2 otherwise).
 
-After the implementer's turn, once the checks pass, zcode-agent opens a **fresh engine session** on the first image-capable model (GLM-5.3-Flash, effort `high`, same workspace and session environment). It serves the app on `$ZCODE_PORT`, then in one scripted Playwright pass per round, in a fresh isolated browser profile so it never judges a stale copy, waits for fonts and animations at every viewport, scrolls a window height at a time to the bottom of the page and saves a screenshot per step (plus every state a criterion names) into `$ZCODE_OUT/verify/<round>/`. It reads them all in one batch, makes no edits, and answers with a `zcode-visual` block `[{criterion, viewport, met, seen, note, shot}]`, quoting the text it can read (`seen`). It always judges one built-in criterion too: all text the page means to show is readable after animations finish (not clipped, hidden, transparent, off-screen or overlapped).
+**Visual verification.** `--visual "criterion"` (repeatable), `--viewport WxH` (repeatable, default `390x844` and `1440x900`) and `--serve "cmd"` (must honour `$ZCODE_PORT`; by default the verifier reads `package.json`) hand the judgement to a fresh session that did not build the result. After the checks pass, it serves the app, waits for fonts and animations, scrolls one window height at a time to the bottom at every viewport, saves the screenshots under `$ZCODE_OUT/verify/<round>/`, and answers with what it can read (`seen`) for each criterion. It always judges one more criterion: all text the page means to show is readable after animations finish. Unmet criteria go back to the executor as repair turns with the verifier's notes and screenshot paths. A verifier that fails twice gives `met: null` and status `partial`. Write criteria as what must be visible: "the headline 'Plans for every team' is fully readable at 390 and 1440".
 
-Those entries are the result's `visual`; the implementer's own claims survive only as `executorVisual` in the full record. Unmet criteria spend the repair budget like failing checks: the repair turn goes to the implementer with the verifier's `seen`, note and shot paths, then checks and a new verifier round run. A verifier that fails or returns no parsable block is retried once; still nothing gives `met: null`, status `partial` and the issue `visual not verified`. Still unmet after the budget: `partial` with `visual criteria unmet: …`. An implementer on a model that cannot see images (`--model glm-5.3`) is told so and to self-check visibility in the DOM instead. Files the verifier changes outside `.zcode/` (and outside any concurrent session's ownership) are reported as the issue `verifier edited files: …`. A verifier request that streams far past any real one (200k characters without a tool call) is ended and retried, so a runaway generation costs minutes, not the engine's 128k-token cap. Verifier turns count in `usage` and in `zcode-agent cost`. Without `--visual` nothing changes.
+</details>
 
 &nbsp;
 
 ## Models and effort
 
-Every command runs on GLM-5.3-Flash (it sees images) at effort `max` unless you pass a flag. Plan sessions, units, resume, `run`, `agent` and the verifier all default to Flash. `--model glm-5.3` is an explicit override and cannot see images (`zcode-agent doctor` shows `images` / `no images` per model). Subagent profiles copied from your desktop that pin a GLM-5.3 id are rewritten, in the session's copy only, to the session's model.
+Every command runs on GLM-5.3-Flash at effort `max` unless you pass a flag. Flash reads images, so the executor can check its own UI and the verifier can judge screenshots. `--model glm-5.3` is an override for work that needs the larger model, and it cannot read images.
 
-| setting | flag | values | default |
-|---|---|---|---|
-| model | `--model` | `glm-5.3-flash` (aliases `flash`, `5.3-flash`, `53f`), `glm-5.3` (aliases `5.3`, `53`) | `glm-5.3-flash` |
-| effort | `--effort` | `low`, `high`, `max` (the engine's levels for both models; `zcode-agent doctor` lists them) | `max` |
+| flag | values | default |
+|---|---|---|
+| `--model` | `glm-5.3-flash`, `glm-5.3` | Flash |
+| `--effort` | `low`, `high`, `max` | `max` |
 
-A task contract can set `"model"` and `"effort"`; flags override the contract. A resumed session keeps its original model and effort unless you pass the flags again.
+`--model` also takes the short names `flash`, `5.3-flash` and `53f` for Flash, and `5.3` and `53` for GLM-5.3. A contract can set `"model"` and `"effort"`, and flags override it. A resumed session keeps its model and effort unless you pass the flags again. Any other model or an unsupported effort exits 2 before anything starts.
 
 &nbsp;
 
 ## Sessions
 
-Every invocation gets a session: `--id page-1`, or a generated `zc-xxxxxxxx`. Each session has its own engine HOME (`~/.zcode-agent/sessions/<id>/home`), so conversation state, engine database, MCP servers, and skills never leak between sessions. An existing id is never re-run, so retrying a start you lost track of fails fast instead of doing the work twice.
+Every run is a session, named with `--id` or given a `zc-xxxxxxxx` id. Each session has its own engine home under `~/.zcode-agent/sessions/<id>/`, so conversations, MCP servers and skills never leak between sessions. zcode-agent never re-runs an existing id, so a retried start fails fast instead of doing the work twice.
 
 ```sh
-zcode-agent task --detach --id page-1 --owns src/pages/home/ --check "npm run build" "Build page 1"
-zcode-agent task --detach --id page-2 --owns src/pages/team/ --check "npm run build" "Build page 2"
-zcode-agent watch                  # live: phase, last tool, requests, cost, STALLED?
-zcode-agent status page-1 --json   # one session: state, phase, activity, recent events, result
-zcode-agent wait page-1 page-2     # block until both finish; print each handback
-zcode-agent wait page-1 page-2 --any   # return as soon as the first one finishes
-zcode-agent result page-1          # a finished session's handback, without waiting
-zcode-agent resume page-2 "Use the 2-column variant below 1024px."   # answer / follow up / retry
-zcode-agent cancel page-1          # stop the turn and any running check; recorded as cancelled
-zcode-agent cost                   # what the sessions in this directory cost
+zcode-agent task --detach --id home --owns src/pages/home/ --check "npm run build" "Build the home page"
+zcode-agent task --detach --id team --owns src/pages/team/ --check "npm run build" "Build the team page"
+zcode-agent wait home team             # block until both finish, print each handback
+zcode-agent wait home team --any       # return when the first one finishes
+zcode-agent status home --json         # state, phase, recent events, result
+zcode-agent result home                # a finished session's handback
+zcode-agent resume team "Use the 2-column variant below 1024px."
+zcode-agent cancel home
 ```
 
-- **Lifecycle.** A session is `queued`, then `running`, then `finished` with a status. If the process that owned a running session dies, the session shows as `interrupted`, which can be resumed.
-- **Resume** sends your message into the same engine conversation. For task sessions, the model is told that earlier work is already applied to the workspace, and zcode-agent re-runs the checks and repairs and produces a fresh handback. A resume with no message (task sessions) means "continue from where you stopped".
-- **Never automatically re-sent.** zcode-agent retries only engine start-up, which happens before anything reaches the model. A prompt that was delivered is never re-sent automatically. Continuing is always an explicit `resume`.
-- **Detached sessions** write their NDJSON to `~/.zcode-agent/sessions/<id>/stdout.ndjson` and diagnostics to `stderr.log`. The handback lands in `result.json`. You never need to read these files: `status` and `wait` print everything.
+A session goes from `queued` to `running` to `finished`. If the process that owns it dies, it shows as `interrupted` and can be resumed. `resume` sends your message into the same engine conversation. For task sessions the executor is told the earlier work is already on disk, and zcode-agent runs the checks and repairs again and writes a fresh handback. zcode-agent retries only engine start-up, before anything reaches the model. It never re-sends a prompt on its own.
 
-### Concurrency and ownership
+<details>
+<summary><b>Ownership and concurrency</b></summary>
 
-`--owns` declares what a session may change: a path owns its subtree, and globs are supported. Patterns are relative to `--cwd`. A session without `--owns` owns the whole workspace, which is right for a one-off task in its own checkout.
+&nbsp;
 
-- Starting a session whose ownership **overlaps a running session in the same workspace** is refused with exit 7, unless `--allow-overlap` is passed. The workspace is the git toplevel, so sibling directories of one repo count as one workspace. Disjoint owners (`src/pages/home/` vs `src/pages/team/`) run side by side.
-- After the work, zcode-agent diffs the workspace and reports each changed file. Changes outside the session's ownership are listed in `scopeViolations`, and for task sessions they make the result `partial`. Files that fall in a concurrent session's ownership (including one that started a moment later) are attributed to that session, not counted against this one.
-- For overlapping or risky parallel work, give each session its own git worktree via `--cwd`.
-- `ZAI_CODE_MAX_ACTIVE` (default 8) is a soft machine-wide cap. Sessions beyond it wait in `queued`.
-- **Session environment.** Every session's executor and every check run with `ZCODE_SESSION_ID`, `ZCODE_PORT` (a free TCP port from 41000-48999, reserved per session and unique among live sessions), `ZCODE_OUT` (`<cwd>/.zcode/out/<id>`, created) and `ZCODE_TMP` (a per-session scratch dir). The task prompt tells the executor to use them for dev and preview servers, build output dirs and test artifacts, so parallel sessions cannot collide on a port or a `dist/`. Files under `.zcode/` never count as changes or scope violations, and zcode-agent lists `.zcode/` and `.playwright-mcp/` in the repo's local `.git/info/exclude` (never `.gitignore`).
-- **`--touch <path|glob>`** (repeatable; contract key `touch`) allows minimal edits outside `--owns` without declaring ownership. Touched files are listed in `touched` and are not scope violations. Starting is refused with exit 7 if a running session owns a matching path; a touch reserves nothing, so it never blocks another session's `--owns`.
+`--owns` declares what a session may change. A path owns its subtree, globs work, and patterns are relative to `--cwd`. A session without `--owns` owns the whole workspace.
 
-### Plans: several sessions with dependencies
+- zcode-agent refuses to start a session whose ownership overlaps a running session in the same git repo (exit 7). `--allow-overlap` starts it anyway.
+- After the work, zcode-agent diffs the workspace. Changes outside the session's paths are listed in `scopeViolations` and make a task `partial`. Files in a concurrent session's paths count against that session, not this one.
+- `--touch <path>` allows a small edit outside `--owns` without claiming the path. Touched files are listed in `touched`. Starting is refused if a running session owns a matching path.
+- Every session and every check gets `ZCODE_SESSION_ID`, `ZCODE_PORT` (a free port from 41000 to 48999), `ZCODE_OUT` (`<cwd>/.zcode/out/<id>`) and `ZCODE_TMP`. Files under `.zcode/` never count as changes, and zcode-agent adds `.zcode/` and `.playwright-mcp/` to the repo's `.git/info/exclude`, never to `.gitignore`.
+- `ZAI_CODE_MAX_ACTIVE` (default 8) caps running sessions per machine. Extra sessions wait in `queued`.
+- For risky parallel work, give each session its own git worktree with `--cwd`.
 
-`zcode-agent plan` runs a set of task sessions as one unit, in dependency order, and returns a single summary.
+</details>
+
+### Plans
+
+A plan runs several task sessions in dependency order and returns one summary.
 
 ```json
-{ "decisions": ["@decisions.md"], "context": ["@brief.md"], "effort": "high",
+{
+  "decisions": ["@decisions.md"],
+  "effort": "high",
   "sessions": [
-    { "id": "tokens", "objective": "Design tokens", "owns": ["src/tokens/**"], "checks": ["npm run lint"] },
-    { "id": "home",   "objective": "Home page", "after": ["tokens"], "owns": ["src/home/**"] },
-    { "id": "team",   "objective": "Team page", "after": ["tokens"], "owns": ["src/team/**"] }
-  ] }
+    { "id": "base", "objective": "Scaffold, tokens and a stub for every page",
+      "owns": ["package.json", "src/app/**", "src/theme/**"], "checks": ["npm run build"] },
+    { "id": "home", "after": ["base"], "objective": "Home page", "owns": ["src/pages/home/**"] },
+    { "id": "team", "after": ["base"], "objective": "Team page", "owns": ["src/pages/team/**"] }
+  ]
+}
 ```
-
-Optional top-level keys: `cwd` (relative to the plan file), `decisions`, `context`, `files` (prepended to every session; `@file` entries are read relative to the plan file, then against the plan's cwd), `model`, `effort`, `limits` (`timeoutMs`, `maxRepairs`, `checkTimeoutMs`: the default for every session; a session's own `limits` override per key). Each session has an `id` (its zcode-agent session id), optional `after` (ids), optional `label` (the session label becomes `plan:<name> <label>`) and any task contract keys. In `plan run --preflight`, a session with `after` is told which upstream sessions have not run yet and to assume they deliver their objectives.
 
 ```sh
-zcode-agent plan check plan.json              # validate: exit 2, one line per problem
-zcode-agent plan run plan.json --preflight    # read-only questions per session (<id>.pre); exit 10 if any
-zcode-agent plan run plan.json --detach       # supervise in the background
-zcode-agent plan wait plan   --json --timeout-ms 7000000   # one line; exit 124 on timeout
-zcode-agent plan status plan                  # one line per session
-zcode-agent watch --plan plan                 # live view with cost, for humans
-zcode-agent plan resume plan "answers…"       # resume failed/partial/blocked sessions, relaunch skipped ones
+zcode-agent plan check plan.json              # validate: one line per problem, exit 2
+zcode-agent plan run plan.json --preflight    # read-only questions for every session
+zcode-agent plan run plan.json --detach       # run it in the background
+zcode-agent plan wait plan --json             # one summary line when it ends
+zcode-agent plan resume plan "answers"        # resume failed, partial or blocked sessions
 ```
 
-A session starts once everything it is `after` has completed; sessions that can run together must own disjoint paths (`plan check` enforces it). A session that ends without completing marks its downstream `skipped` while the others continue. The summary is `{"type":"plan","name","status","sessions":[{"id","status"}],"briefs":[…]}` with a brief for each finished session that did not complete. Exit codes: 0 completed, 10 blocked, 8 partial or failed, 124 timeout. Plan status is derived from the sessions, so it stays accurate even if the supervisor process dies; `plan resume` restarts it. The plan name is the file's basename (`--id` overrides); ids that already exist as sessions are refused, so re-run through `plan resume`.
-
-The critical path is what you wait for. Put visual criteria on sessions that build finished UI, not on a scaffold of stubs, and give an integration session only cross-cutting criteria: each verifier round is minutes of Flash time.
+A session starts when every session it is `after` has completed. Sessions that can run at the same time must own different paths, and `plan check` enforces it. When a session ends without completing, the sessions after it are `skipped` and the rest carry on. Top-level `decisions`, `context`, `files`, `model`, `effort` and `limits` apply to every session. Keep the chain short: each `after` waits for a whole session, and visual criteria belong on the sessions that build finished UI.
 
 &nbsp;
 
 ## Cost
 
-`zcode-agent cost [<dir>]` totals every zcode-agent session whose workspace is `<dir>` or below it (default: the current directory): one row per session and a total, priced at Z.ai's API list price in USD per million tokens.
+`zcode-agent cost [<dir>]` totals every session whose workspace is `<dir>` or below it, one row per session, priced at Z.ai's API list price in USD per million tokens.
 
 | model | input | cached input | output |
 |---|---|---|---|
 | GLM-5.3-Flash | 0.15 | 0.03 | 0.50 |
 | GLM-5.3 | 1.40 | 0.26 | 4.40 |
 
-The counts come from each session's own engine database: every request of the implementer, its subagents and the verifier, across every resume. `--app` adds the desktop app's own sessions opened in that directory; `--json` prints `{type:"cost", dir, total, sessions[, app]}`. A session without an engine database falls back to its recorded token totals, marked `~` (no cache split, so priced high). Set `ZCODE_PRICES='{"GLM-5.3-Flash":{"input":0.15,"cached":0.03,"output":0.5}}'` to price a plan or a different provider. `zcode-agent watch` shows the same figure per session as it grows. If you are on a Z.ai coding plan, this is what the work would have cost at API rates, not what you are billed.
-
-&nbsp;
-
-## One-shot turns and subagent dispatch
-
-`zcode-agent` with a prompt (or `zcode-agent run`) is a plain turn. The answer streams to stdout, and thinking is mirrored to stderr as `│ ` lines.
-
-```sh
-zcode-agent "What is 17*23? Reply with only the number."
-zcode-agent --effort high "Draft a commit message for the staged diff"
-echo "$PROMPT" | zcode-agent
-```
-
-`zcode-agent agent "<instructions>"` forces a dispatch through the engine's Agent tool. It is verified from `session/subagents`: exit 6 if no subagent ran or any ended in a status other than `success`. `--profile` picks the subagent profile (default `general-purpose`). Inside `zcode-agent task`, subagents are optional: the executor decides when to use them, gives each a bounded scope and file ownership, and must verify the integrated result.
+The counts come from each session's own engine database and include the executor, its subagents and the verifier, across every resume. `--app` adds the ZCode app's own sessions in that directory, and `--json` prints one object. Set `ZCODE_PRICES='{"GLM-5.3-Flash":{"input":0.15,"cached":0.03,"output":0.5}}'` to use other rates. On a Z.ai coding plan, this is what the work would cost at API rates, not what you pay.
 
 &nbsp;
 
 ## Machine interface
 
-`--json`: stdout carries NDJSON events, then exactly one final `{"type":"result",…}` line. With `--quiet`, the result line is the only output. For task sessions, text/reasoning deltas are left out of the events unless you pass `--stream`, so an orchestrator reading the output pays only for lifecycle events.
+With `--json`, stdout carries NDJSON events and then exactly one `{"type":"result",…}` line. With `--quiet`, the result line is the only output. Task sessions leave text deltas out of the events unless you pass `--stream`, so your agent pays only for the lifecycle events.
 
-The final line is the compact **brief** (`zcode.brief/1`), sized for an orchestrator that spends tokens on decisions. Keys with empty values are omitted:
-
-```json
-{"type":"result","schema":"zcode.brief/1","status":"failed","ok":false,"id":"page-1","label":"home",
- "summary":"…(≤600 chars)…","files":["src/pages/home/index.tsx"],
- "checks":[{"command":"npm run lint","ok":true},{"command":"npm test","ok":false,"exitCode":1,"tail":"…last 1500 chars…"}],
- "questions":[],"issues":["…"],"unresolved":[],"scopeViolations":[],"error":{"kind":"checks_failed"},
- "result":"/…/sessions/page-1/result.json"}
-```
-
-The brief lists unmet visual criteria only (`visualMet: "M/N"` counts them all), at most 6 `decisions` (`decisionsMore`) and 40 `files` (`filesMore`, concurrent sessions' files excluded). `run` and `agent` briefs also carry `response`, because the text answer is the product there. Only failing checks are listed (`checksPassed: N` counts the passing ones); a failing check carries `exitCode`, `timedOut` and the last 1500 characters of its output as `tail`. `result` is the path to the full record: `result.json` on disk is always the full `zcode.result/1` record, and `--full` prints that same record instead of the brief (on `task`/`run`/`agent`/`resume`/`wait`/`result`):
+The result line is the compact brief (`zcode.brief/1`). Empty keys are left out:
 
 ```json
-{"type":"result","schema":"zcode.result/1","ok":true,"status":"completed","id":"page-1","kind":"task",
- "summary":"…","response":"…executor report…","issues":[],"questions":[],"unresolved":[],"notVerified":[],
- "changes":{"tracking":"git","files":[{"path":"src/pages/home/index.tsx","change":"added","owned":true}]},
- "scopeViolations":[],"checks":[{"command":"npm run build","ok":true,"exitCode":0,"timedOut":false,"durationMs":8123,"output":"…tail…"}],
- "checksPassed":true,"repairs":0,"handback":{"status":"done","summary":"…","changes":[],"checks":[],"criteria":[],"unresolved":[],"questions":[],"notes":""},
- "subagents":[{"agentId":"agent_…","profileId":"general-purpose","status":"success","summary":"…","durationMs":59765}],
- "error":null,"cwd":"/abs/site","workspaceRoot":"/abs/site","owns":["src/pages/home/"],"sessionId":"sess_…","resumed":false,"turns":1,
- "model":"GLM-5.3-Flash","effort":"max","mode":"yolo","usage":{"inputTokens":19608,"outputTokens":3120},
- "toolCalls":14,"durationMs":142301,"files":{"session":"…/sessions/page-1","result":"…/result.json","events":"…/events.ndjson"}}
+{"type":"result","schema":"zcode.brief/1","status":"failed","ok":false,"id":"pricing",
+ "summary":"…","files":["src/pages/pricing/index.tsx"],
+ "checks":[{"command":"npm test","ok":false,"exitCode":1,"tail":"…last 1500 characters…"}],"checksPassed":1,
+ "questions":[],"issues":["…"],"scopeViolations":[],"error":{"kind":"checks_failed"},
+ "result":"/…/sessions/pricing/result.json"}
 ```
 
-`model` and `effort` are engine-reported (from the engine's `model_request_started` event), not echoes. `sessionId` is the engine's session id; `id` is the zcode-agent session id you pass to `status`, `wait`, `result`, `resume`, and `cancel`. A run that fails still ends with a parseable result line.
+<details>
+<summary><b>Brief fields, the full record and events</b></summary>
 
-| event | meaning |
+&nbsp;
+
+The brief lists only failing checks (`checksPassed` counts the rest), unmet visual criteria (`visualMet` is `met/total`), up to 6 `decisions` (`decisionsMore` counts the rest) and 40 `files` (`filesMore`). `run` and `agent` briefs also carry `response`, because the answer is the product there. `result` is the path to the full record. `result.json` on disk is always the full `zcode.result/1` record, and `--full` prints it instead of the brief on `task`, `run`, `agent`, `resume`, `wait` and `result`.
+
+| `type` | meaning |
 |---|---|
-| `{"type":"session","id","kind","cwd","owns","checks","model","effort","resumed"}` | which session is active, and its scope |
-| `{"type":"phase","phase":"starting\|executing\|reporting\|checking\|repairing\|queued"}` | what is running |
-| `{"type":"tool","name":"Edit","phase":"started"}` | tool lifecycle (`scheduled`, `started`, `result`, `error`) |
-| `{"type":"subagent","phase":"started\|returned\|error"}` | subagent activity |
-| `{"type":"check","phase":"finished","command","ok","exitCode","durationMs"}` | zcode-run verification |
-| `{"type":"mcp","name","status"}` · `{"type":"retry",…}` · `{"type":"model_request_started",…}` | MCP settling, start-up retry, engine model evidence |
-| `{"type":"stream","kind":"text_delta\|reasoning_delta","delta"}` | live text (run/agent; task with `--stream`) |
+| `session` | the active session and its scope: id, kind, cwd, owns, checks, model, effort |
+| `phase` | what is running: starting, executing, reporting, checking, repairing, verifying or queued |
+| `tool` | a tool call was scheduled, started, returned or failed |
+| `subagent` | a subagent started, returned or failed |
+| `check` | a check zcode-agent ran, with its exit code and duration |
+| `mcp` | an MCP server connected or failed |
+| `stream` | live text or reasoning (run and agent, or task with `--stream`) |
 
-`zcode-agent status <id> --json` returns `{"type":"status", state, status, phase, pid, live, activity, recent:[…], result?}`. `zcode-agent wait --json` prints one brief per session as each finishes (`--full`: full records; `--any`: stop at the first). When `--timeout-ms` elapses first it prints exactly one line per session still running, `{"type":"pending","id","state","phase","elapsedMs"}` (human mode: `<id> <state> <phase> 12m`), and exits 124. `zcode-agent watch [<id>… | --plan <name>] [--stall-min 8]` is a live view for humans (no model tokens): one line per session, `id  state phase[ n/m]  elapsed  last: <tool> <age> ago  req <n>  sub <running>  $cost` (and a `total` line for several sessions on a TTY), with `STALLED?` appended when a running session has had no engine event for `--stall-min` minutes (default 8). On a TTY it redraws every 2 s; piped, it prints a line when a session changes; it exits 0 when every watched session has finished (no arguments: live sessions and those finished in the last 10 minutes). `status <id>` (human and `--json`) gains `idleMs` and `stalled: true` for running sessions by the same rule, and `wait` / `plan wait` pending lines carry `idleMs` (`stalled: true` when so). Nothing is done automatically. `zcode-agent cost [<dir>] [--app] [--json]` is covered under [Cost](#cost). `zcode-agent result <id> [--json] [--full]` prints a finished session's handback without waiting (exit 7 if it is still running). `zcode-agent status` without an id is one line for each of the 15 most recent sessions plus `… N more (zcode-agent status --all)`. `zcode-agent <command> --help` prints only that command's usage (under 2000 bytes); bare `zcode-agent --help` is the full reference. Usage errors are always a single line (`zcode-agent: unknown flag (did you mean …?)` for a mistyped option), never the help text.
+`zcode-agent status <id> --json` returns state, phase, pid, recent events and the result. `zcode-agent wait --json` prints one brief per session as each finishes. When `--timeout-ms` runs out first, it prints one `{"type":"pending","id","state","phase","elapsedMs","idleMs"}` line per running session and exits 124. `zcode-agent <command> --help` prints only that command's usage. Usage errors are always one line.
+
+</details>
 
 &nbsp;
 
 <details>
-<summary><b>Options</b></summary>
+<summary><b>All options</b></summary>
 
-| option | applies to | default | notes |
-|---|---|---|---|
-| `--id`, `--label` | run, task, agent | `zc-<random>` | session identity |
-| `--detach` | run, task, agent, resume | off | background worker; prints the id |
-| `--cwd` | run, task, agent | current dir | the workspace and blast radius |
-| `--owns` | run, task, agent | whole workspace | repeatable path or glob |
-| `--touch` | task | | repeatable; minimal edits outside `--owns`, reported as `touched` |
-| `--allow-overlap` | run, task, agent | off | start despite overlapping ownership |
-| `--task` | task | | JSON contract, markdown brief, or `-` |
-| `--accept`, `--check`, `--file`, `--context` | task | | repeatable; `--context @file` reads a file (a `--file` also inlined this way is listed once) |
-| `--decision`, `--decisions` | task | | repeatable binding decisions; `--decisions @file` reads a file |
-| `--preflight` | task | off | read-only turn that returns the open questions; `resume <id> "<answers>"` then executes |
-| `--unit` | task | | repeatable `"name: objective [owns a,b]"`; one subagent per unit |
-| `--visual`, `--viewport`, `--serve` | task | viewports `390x844`, `1440x900` | an independent image-capable verifier screenshots the app and judges each criterion |
-| `--max-repairs` | task, resume | `2` | repair turns after failing checks |
-| `--check-timeout-ms` | task, resume | `300000` | per check; checks get `CI=1` when unset |
-| `--model` | all turns | `glm-5.3-flash` | `glm-5.3` plus aliases `5.3`, `53`, `flash`, `5.3-flash`, `53f` |
-| `--effort` | all turns | `max` | the model's levels: `low`, `high`, `max` |
-| `--timeout-ms` | all turns; wait | run 600000, task 7200000 (2 h) | the whole invocation incl. checks and repairs |
-| `--session` | run | | 0.3 compat: continue by zcode-agent id or engine `sess_` id |
-| `--profile` | agent | `general-purpose` | subagent profile |
-| `--mcp` / `--mcp-list` | run, task, agent | the app's servers | add MCP servers (inline JSON or `@file`); print the effective set |
-| `--hermetic` | run, task, agent | off | leave out the app's MCP servers and skills (`ZCODE_HERMETIC=1` for every session) |
-| `--no-browser` | run, task, agent | off | drop the `playwright` MCP server (the app's, or the default headless one) |
-| `--skills` / `--no-skills` | run, task, agent | the app's skills | add skills; or run with none at all |
-| `--inherit-desktop` | run, task, agent | off | also give the executor the app's `AGENTS.md`, plugins and agent profiles |
-| `--install-browser` | doctor | off | install the Chromium build the default Playwright server drives |
-| `--json`, `--full`, `--quiet` | all | | see Machine interface |
-| `--any` | wait | off | return when the first listed session finishes |
-| `--app` | cost | off | also count the desktop app's sessions in the directory |
-| `--thinking` / `--no-thinking` | turns | run on, task off | mirror reasoning to stderr |
-| `--stream`, `--include-reasoning` | turns | off | deltas in task events; full reasoning in the result |
+&nbsp;
 
-Only `glm-5.3` and `glm-5.3-flash` are accepted; anything else exits 2 before any spawn. The effort levels each model accepts are read from the engine's builtin provider config (`zcode-agent doctor --json` lists them as `models`; a built-in table is the fallback). An unsupported model and effort pair, whether from `--effort`, the task contract, or a resumed session's stored setting, exits 2 with one line naming the supported values, before any engine is spawned.
+| option | what it does |
+|---|---|
+| `--id`, `--label` | name the session (run, task, agent). Default id: `zc-<random>` |
+| `--detach` | run in the background and print the id (run, task, agent, resume) |
+| `--cwd` | the workspace, and the limit of what the session may touch. Default: the current directory |
+| `--owns` | repeatable path or glob the session may change. Default: the whole workspace |
+| `--touch` | task: repeatable small edits outside `--owns` |
+| `--allow-overlap` | start despite overlapping ownership |
+| `--task` | task: a JSON contract, a markdown brief, or `-` for stdin |
+| `--accept` | task: repeatable acceptance criterion |
+| `--check` | task: repeatable shell check that zcode-agent runs itself |
+| `--file` | task: repeatable file to read first |
+| `--context` | task: repeatable background; `@file` reads a file |
+| `--decision` | task: repeatable binding decision |
+| `--decisions` | task: binding decisions, usually `@file` |
+| `--preflight` | task and plan run: a read-only turn that returns the open questions |
+| `--unit` | task: repeatable `"name: objective [owns a,b]"`, one subagent per unit |
+| `--visual` | task: repeatable criterion a fresh session judges from screenshots |
+| `--viewport` | task: repeatable `WxH` for `--visual`. Default: `390x844` and `1440x900` |
+| `--serve` | task: the command that serves the app on `$ZCODE_PORT` |
+| `--max-repairs` | task and resume: repair turns after failures. Default: 2 |
+| `--check-timeout-ms` | task and resume: time limit per check. Default: 300000 |
+| `--model` | `glm-5.3-flash` (default) or `glm-5.3` |
+| `--effort` | `low`, `high` or `max` (default) |
+| `--timeout-ms` | the whole run, checks and repairs included. Default: 10 min for run, 2 h for task |
+| `--session` | run: continue by zcode-agent id or engine `sess_` id |
+| `--profile` | agent: the subagent profile. Default: `general-purpose` |
+| `--mcp` | add MCP servers, as inline JSON or `@file` |
+| `--mcp-list` | print the effective MCP server set and exit |
+| `--hermetic` | leave out the ZCode app's MCP servers and skills |
+| `--no-browser` | drop the Playwright MCP server |
+| `--skills` | add skills: one skill directory, or a directory of them |
+| `--no-skills` | run with no skills at all |
+| `--inherit-desktop` | also give the executor the app's `AGENTS.md`, plugins and agent profiles |
+| `--install-browser` | doctor: install the Chromium build the default Playwright server uses |
+| `--json` | NDJSON events, then one result line |
+| `--full` | with `--json`, and on result and wait: the full record instead of the brief |
+| `--quiet` | no progress output |
+| `--any` | wait: return when the first session finishes |
+| `--app` | cost: also count the ZCode app's sessions |
+| `--thinking` | mirror reasoning to stderr (on for run, off for task; `--no-thinking` turns it off) |
+| `--stream` | task: include text deltas in the events |
+| `--include-reasoning` | put the full reasoning in the result |
 
 </details>
 
@@ -359,16 +365,16 @@ Only `glm-5.3` and `glm-5.3-flash` are accepted; anything else exits 2 before an
 |---|---|
 | 0 | completed |
 | 1 | unexpected internal error |
-| 2 | usage error (bad flag, model, effort, contract, unknown or duplicate session id) |
+| 2 | usage error: bad flag, model, effort, contract, or a session id that exists |
 | 3 | no API key (`ZAI_API_KEY`, `zcode-agent login`, or a key in the ZCode app) |
-| 4 | engine or builtin provider config not found (reinstall: the engine ships with the package) |
+| 4 | engine not found (reinstall; the engine comes with the package) |
 | 5 | failed: engine or turn error |
-| 6 | `agent`: no subagent dispatched or none ended `success` |
-| 7 | workspace conflict, or the session is already running |
+| 6 | `agent`: no subagent ran, or none ended `success` |
+| 7 | overlapping ownership, or the session is already running |
 | 8 | partial, or checks still failing after repairs |
 | 9 | unverified |
 | 10 | blocked |
-| 124 | `--timeout-ms` exceeded |
+| 124 | `--timeout-ms` ran out |
 | 130 | cancelled |
 
 </details>
@@ -376,15 +382,17 @@ Only `glm-5.3` and `glm-5.3-flash` are accepted; anything else exits 2 before an
 <details>
 <summary><b>Under the hood</b></summary>
 
-**Key handling.** The key comes from the `ZAI_API_KEY` env var, then `zcode-agent login` (stored at `~/.zcode-agent/credentials.json`, mode 600), then the ZCode app's own Z.ai API key, read in place from its settings (`ZCODE_NO_DESKTOP_KEY=1` turns that off). The app's OAuth tokens are never read. The key is never printed or logged. Engine messages and check output are scrubbed before they are stored or shown. The only files the key ever lands in are each session's scratch provider config, which the engine requires to register the provider.
+&nbsp;
 
-**Isolation.** This package's state lives under `~/.zcode-agent` (a pre-1.0 `~/.zcode-cli` is moved there on first run and left as a symlink), never under `~/.zcode`, which belongs to the desktop app. Each session's engine runs with `HOME` pointed at its own scratch directory. On every invocation zcode-agent rewrites the scratch config from your live desktop config: the provider rule with your key, the app's enabled MCP servers (minus OAuth-only remote ones and those that failed in the last six hours, recorded in `~/.zcode-agent/mcp-health.json`), and the app's user skills, symlinked ones included. The app's plugins, agent profiles (except the one `--profile` names) and global `AGENTS.md` are left out by default, because guidance written for interactive work (companion files to read, skills to load) was re-argued in the model's reasoning against the task contract; `--inherit-desktop` adds them. Every session gets zcode-agent's own executor instructions as `AGENTS.md`. The Playwright server runs isolated: a fresh browser profile per engine, so the implementer's and the verifier's browsers never share a lock or a cache. zcode-agent never touches the engine's database there, so sessions stay resumable. The desktop's `credentials.json` is never copied, and the live `~/.zcode` is never written. The engine's plugin cache is shared between sessions through a symlink.
+**The API key.** zcode-agent takes the key from `ZAI_API_KEY`, then from `zcode-agent login` (stored in `~/.zcode-agent/credentials.json`, mode 600), then from the ZCode app's own Z.ai API key, read where the app stores it. `ZCODE_NO_DESKTOP_KEY=1` turns the last one off. zcode-agent never reads the app's OAuth tokens, never prints or logs the key, and scrubs it from engine messages and check output. The only file it writes the key to is each session's own provider config, which the engine needs.
 
-**The engine.** `@zcode-agent/engine` (a pinned dependency) is the headless ZCode engine, `zcode.cjs`, built unmodified from [zai-org/ZCode](https://github.com/zai-org/ZCode) at the tag in `packages/engine/engine.json`, with the content plugins and bundled skills the app ships and upstream's `LICENSE`, `NOTICE.md` and third-party notices. `ZAI_CODE_ENGINE` points at another `zcode.cjs`; without the package, the ZCode app's own engine is used. `zcode-agent doctor` shows which engine runs and warns when its version differs from the tested one.
+**Isolation.** zcode-agent keeps its state in `~/.zcode-agent` and never writes to `~/.zcode`, which belongs to the ZCode app. On first run it moves a pre-1.0 `~/.zcode-cli` there and leaves a symlink. Each session's engine runs with `HOME` set to the session's own directory. On every run zcode-agent rewrites that directory's config: the provider with your key, the app's MCP servers (minus OAuth servers and those in `~/.zcode-agent/mcp-health.json` that failed in the last six hours), and the app's user skills, including symlinked ones. Every session gets zcode-agent's executor instructions as its `AGENTS.md`: headless rules, the session's port and output directories, and when to split work across subagents. The Playwright server runs with a fresh browser profile per engine, so the executor's and the verifier's browsers never share a lock or a cache. zcode-agent never touches the engine's database, so sessions stay resumable.
 
-**Yolo mode.** Tool side effects are auto-approved, matching the engine's own headless default; `--cwd` is the blast radius. If a headless turn requests interactive input, the result is reported as `blocked` instead of hanging. The executor contract forbids commits, pushes, deploys, and other external side effects unless the task explicitly asks for them.
+**The engine.** `@zcode-agent/engine` is the headless ZCode engine (`zcode.cjs`), built by `npm run build:engine` from the tag in `packages/engine/engine.json`, with the content plugins and bundled skills the app ships and upstream's `LICENSE`, `NOTICE.md` and third-party notices. `ZAI_CODE_ENGINE` points at another `zcode.cjs`. Without the package, zcode-agent uses the ZCode app's engine. `zcode-agent doctor` shows which engine runs and warns when its version differs from the tested one.
 
-**Environment.** `ZAI_API_KEY`, `ZAI_CODE_HOME` (state root), `ZAI_CODE_ENGINE` (engine bundle), `ZAI_CODE_NODE` (engine interpreter), `ZAI_CODE_BUILTIN_PROVIDER_CONFIG`, `ZAI_CODE_LIVE_DIR` (desktop config dir, default `~/.zcode`), `ZCODE_HERMETIC=1`, `ZCODE_INHERIT_DESKTOP=1`, `ZCODE_NO_DESKTOP_KEY=1`, `ZAI_CODE_MAX_ACTIVE`, `ZCODE_PRICES` (cost rates, USD per M tokens), `ZCODE_APP_DB` (desktop DB for `cost --app`), `NO_COLOR`.
+**Yolo mode.** The engine approves tool calls on its own, as in its headless default, and `--cwd` limits where they run. A headless turn that asks for input ends as `blocked` instead of hanging. The executor instructions forbid commits, pushes, deploys and other outside effects unless the task asks for them.
+
+**Environment.** `ZAI_API_KEY`, `ZAI_CODE_HOME` (state directory), `ZAI_CODE_ENGINE`, `ZAI_CODE_NODE` (the engine's Node), `ZAI_CODE_BUILTIN_PROVIDER_CONFIG`, `ZAI_CODE_LIVE_DIR` (the app's directory, default `~/.zcode`), `ZCODE_HERMETIC=1`, `ZCODE_INHERIT_DESKTOP=1`, `ZCODE_NO_DESKTOP_KEY=1`, `ZAI_CODE_MAX_ACTIVE`, `ZCODE_PRICES`, `ZCODE_APP_DB` (the app's database for `cost --app`), `NO_COLOR`.
 
 </details>
 
@@ -392,20 +400,20 @@ Only `glm-5.3` and `glm-5.3-flash` are accepted; anything else exits 2 before an
 
 ## Development
 
-An npm workspace with two packages: [`packages/cli`](packages/cli) (`zcode-agent`: plain CommonJS, no build step, no dependencies but the engine) and [`packages/engine`](packages/engine) (`@zcode-agent/engine`, built from upstream).
+The repo is an npm workspace with two packages. [`packages/cli`](https://github.com/0xgeorgemathew/zcode-agent/tree/main/packages/cli) is `zcode-agent`: plain CommonJS, no build step, and no dependency except the engine. [`packages/engine`](https://github.com/0xgeorgemathew/zcode-agent/tree/main/packages/engine) is `@zcode-agent/engine`, built from upstream.
 
 ```sh
-npm install                  # links the workspace
-npm run build:engine         # builds packages/engine/dist from the pinned zai-org/ZCode tag (git + network)
-npm test                     # unit suite: in-process, scripted fake engine, no CLI spawn, no API calls
-npm run test:live            # functional suite: spawns the CLI against the real engine and GLM API
-npm run accept:flash --workspace zcode-agent   # black-box acceptance runs (real API); also accept:subagent, accept:53
+npm install                  # link the workspace
+npm run build:engine         # build the engine from the pinned zai-org/ZCode tag
+npm test                     # unit tests: in-process fake engine, no API calls
+npm run test:live            # live tests: the real engine and the GLM API
+npm run release:check        # verify the engine pin, run the tests, pack both packages
 ```
 
-Live tests load the key from the repo `.env`, which is never committed or shipped. The design record and the wire-protocol facts pinned live are in `DESIGN.md` and `docs/BUILD-REPORT.md`.
+Live tests read the key from the repo's `.env`, which is never committed or published. `DESIGN.md` records the design decisions and the engine protocol facts.
 
 ## License
 
-MIT for zcode-agent. The bundled engine is Apache-2.0 (upstream's license and notices ship inside `@zcode-agent/engine`). Source and issues: [github.com/0xgeorgemathew/zcode-agent](https://github.com/0xgeorgemathew/zcode-agent).
+zcode-agent is MIT. The bundled engine is Apache-2.0, and upstream's license and notices ship inside `@zcode-agent/engine`.
 
-zcode-agent is an independent project, not affiliated with, endorsed by, or sponsored by Zhipu AI / Z.ai. ZCode and GLM are Z.ai's.
+zcode-agent is an independent project. It is not affiliated with, endorsed by or sponsored by Zhipu AI or Z.ai. ZCode and GLM belong to Z.ai.

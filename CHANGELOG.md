@@ -17,6 +17,7 @@ Renamed to **zcode-agent** (npm `zcode-agent`, command `zcode-agent`, `npx zcode
 - **`doctor`** reports the key source, which engine runs (and the tested version), the inherited MCP servers and those skipped, inherited skills and the browser; exits 1 on node < 22.13 (the engine's `node:sqlite`).
 - **Skills** (`zcode-agent skills install` replaces a pre-1.0 `zcode` skill): a Parallelizing section — units inside one session first, parallel sessions only for independent deliverables with disjoint paths, shared files owned by a scaffold, dependencies installed once, 2–4 concurrent sessions, and when not to split.
 - Node ≥ 22.13 (was ≥ 20).
+- README rewritten for any orchestrating agent, with a new hero diagram in light and dark versions (`docs/assets/build-hero.mjs` generates both).
 
 ### Measured (trivial `run`, this machine: 9 inherited MCP servers, 111 skills)
 
