@@ -57,13 +57,14 @@ function resolveRuntime(env = process.env) {
   };
 }
 
-function makeClient(runtime, { home, cwd, sessionEnv = {} }) {
+function makeClient(runtime, { home, cwd, sessionEnv = {}, interactions = null }) {
   return new AppServerClient({
     nodeBin: runtime.nodeBin,
     enginePath: runtime.enginePath,
     env: engineEnv({ home, builtinProviderConfig: runtime.builtinConfig, sessionEnv }),
     cwd,
     scrub: runtime.scrub,
+    interactions,
   });
 }
 

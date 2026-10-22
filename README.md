@@ -41,6 +41,8 @@ npx zcode-agent task \
 
 To skip `npx`, install it once with `npm install -g zcode-agent`. It needs Node 22.13 or later.
 
+zcode-agent is also an [ACP](https://agentclientprotocol.com) agent: `zcode-agent acp` lets you chat with GLM-5.3 directly in T3 Code, Zed or any other Agent Client Protocol client. See [Use it in T3 Code, Zed or any ACP client](#use-it-in-t3-code-zed-or-any-acp-client).
+
 **With the ZCode app installed, there is nothing to configure.** zcode-agent reads the app's Z.ai API key where it is stored (it never copies or prints it) and gives every session the app's MCP servers and skills. It leaves out remote MCP servers that sign in with OAuth, because a headless session can't complete the sign-in, and it skips a server that failed to connect for the next six hours. The app's plugins, agent profiles and your global `AGENTS.md` stay out unless you pass `--inherit-desktop`. `--hermetic` leaves out the app's MCP servers and skills as well.
 
 **Without the app**, set an API key and install a browser for visual checks:
@@ -267,6 +269,54 @@ A session starts when every session it is `after` has completed. Sessions that c
 | GLM-5.3 | 1.40 | 0.26 | 4.40 |
 
 The counts come from each session's own engine database and include the executor, its subagents and the verifier, across every resume. `--app` adds the ZCode app's own sessions in that directory, and `--json` prints one object. Set `ZCODE_PRICES='{"GLM-5.3-Flash":{"input":0.15,"cached":0.03,"output":0.5}}'` to use other rates. On a Z.ai coding plan, this is what the work would cost at API rates, not what you pay.
+
+&nbsp;
+
+## Use it in T3 Code, Zed or any ACP client
+
+`zcode-agent acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com) (v1) on stdio, so an ACP client drives GLM-5.3 directly: you chat with it, approve its edits and commands, and watch its tool calls, diffs and plan as they happen. `zcode-agent-acp` is the same command for clients that take only an executable. Key, MCP servers and skills work the same way as for `task`.
+
+**T3 Code** (a build with the ACP Registry provider): install zcode-agent globally, then add a provider in Settings → Providers. Choose **ACP Registry**, set **ACP source** to **Local command** and **Executable override** to `zcode-agent-acp`. To set it in `~/.t3/userdata/settings.json` instead:
+
+```json
+"providerInstances": {
+  "zcodeAgent": {
+    "driver": "acpRegistry",
+    "displayName": "zcode-agent (GLM-5.3)",
+    "enabled": true,
+    "config": { "source": "local", "commandPath": "zcode-agent-acp", "commandArgs": [] }
+  }
+}
+```
+
+T3 Code then offers GLM-5.3-Flash and GLM-5.3, with **Mode** and **Effort** pickers. Its runtime modes map onto the agent's approvals: in full access T3 answers every approval itself, and in approval-required it asks you. T3's plan mode switches the agent to its read-only Plan mode.
+
+**Zed** (`settings.json`):
+
+```json
+"agent_servers": {
+  "zcode-agent": { "type": "custom", "command": "zcode-agent", "args": ["acp"], "env": {} }
+}
+```
+
+| mode | the agent… |
+|---|---|
+| `build` (Ask, default) | asks before every edit and command |
+| `edit` (Accept edits) | edits files freely and asks before commands |
+| `plan` | only reads, then asks to start with a plan you approve |
+| `yolo` (Full access) | runs every tool without asking |
+
+What the client gets:
+
+- **Live output.** Streaming text and reasoning, tool calls with titles, file locations and diffs, command output, and the to-do list as the plan.
+- **Approvals.** The engine's permission prompts (allow once, always allow in this project, deny) are forwarded to you.
+- **Picker updates.** Mode, model and effort as session config options; switching model keeps the effort when the new model supports it.
+- **Usage.** Context use and the session's GLM cost so far at API list price, after every turn.
+- **Sessions.** `session/list` and `session/load`: a session reopens in a new process with its history replayed. Every ACP session is a zcode-agent session (`kind: "acp"`), so `zcode-agent status`, `watch` and `cost` include it.
+- **Inputs.** Images (saved to the session's tmp dir for GLM-5.3-Flash to read), embedded files and file links in prompts. Your client's MCP servers (stdio, HTTP, SSE) are added to the session.
+- **Cancel.** Stops the running turn and its tools.
+
+The engine starts at the first prompt, not at `session/new`, so client probes cost nothing and leave no session behind. Flags set the defaults for new sessions: `--mode`, `--model`, `--effort`, `--hermetic` (fastest start: none of the app's MCP servers to connect), `--no-browser`, `--mcp`, `--skills`, `--timeout-ms` (per prompt; default none). `ZCODE_ACP_MODE` sets the default mode for clients that take no arguments, and `ZCODE_ACP_LOG=<file>` logs every frame. Questions the model would ask through a form are asked in its reply instead, because ACP v1 has no form UI.
 
 &nbsp;
 

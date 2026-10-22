@@ -119,6 +119,21 @@ Engine, key, inherited MCP servers and skills, and browser report.
 drives (needed only without the ZCode app's own Playwright server).`,
   skills: `usage: zcode-agent skills [install|uninstall] [claude|codex]
 Install the orchestrator skills (default: show status).`,
+  acp: `usage: zcode-agent acp [options]
+Serve the Agent Client Protocol (ACP v1) on stdio: T3 Code, Zed and any ACP
+client run GLM-5.3 through it. Each ACP session is a zcode-agent session
+(status, watch, cost see it); clients switch mode, model and effort per session.
+  --mode <mode>    default for new sessions: build (ask before edits and
+                   commands) | edit (accept edits) | plan | yolo (full access)
+                   default build (or $ZCODE_ACP_MODE)
+  --model <id>     glm-5.3 | glm-5.3-flash (default glm-5.3-flash)
+  --effort <lvl>   low | high | max (default max)
+  --timeout-ms <n> per prompt (default: none)
+  --mcp <json|@f>  add MCP servers (repeatable)   --hermetic   --no-browser
+  --skills <dir>   add skills (repeatable)        --no-skills
+  --inherit-desktop  also the desktop's AGENTS.md, plugins and agent profiles
+T3 Code: an ACP Registry provider, source "Local command", executable
+zcode-agent-acp (see the README). $ZCODE_ACP_LOG=<file> logs every frame.`,
 };
 
 function commandHelp(command) {
