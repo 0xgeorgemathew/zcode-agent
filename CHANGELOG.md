@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Drawings.** The hero gives GLM-5.3 (builds and checks, green) and GLM-5.3-Flash (the verifier, blue) their own colours, and mentions `zcode-agent acp`; the ACP drawing marks Flash the same way. The README image URLs now end in `?v=2`.
+
 ## 1.2.1
 
 The README drawings (hero and ACP) load with a `?v=1.2.1` query, so GitHub and npm refetch them instead of showing the images cached before 1.2.0. No code changes.

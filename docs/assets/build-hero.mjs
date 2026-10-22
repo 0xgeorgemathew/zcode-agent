@@ -22,16 +22,17 @@ function svg(p) {
     else line(`M${x + 3.5} ${y + 3.5} l5 5 M${x + 8.5} ${y + 3.5} l-5 5`, c, 1.6, 'stroke-linecap="round"');
   };
   const build = (x, w, y, h = 16) => r(x, y, w, h, `rx="3" fill="${p.flash}"`);
-  const verify = (x, w, y) => r(x, y, w, 16, `rx="3" fill="url(#hatch)" stroke="${p.flash}" stroke-width="1"`);
+  const verify = (x, w, y) => r(x, y, w, 16, `rx="3" fill="url(#hatch)" stroke="${p.look}" stroke-width="1"`);
   const repair = (x, w, y) => r(x + 0.75, y + 0.75, w - 1.5, 14.5, `rx="3" fill="none" stroke="${p.flash}" stroke-width="1.5" stroke-dasharray="4 3"`);
 
-  out.push(`<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="${p.flashSoft}"/><line x1="0" y1="0" x2="0" y2="6" stroke="${p.flash}" stroke-width="2.2"/></pattern>`
+  out.push(`<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="${p.lookSoft}"/><line x1="0" y1="0" x2="0" y2="6" stroke="${p.look}" stroke-width="2.2"/></pattern>`
     + `<marker id="head-agent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="${p.agent}"/></marker></defs>`);
   r(0, 0, 960, 520, `rx="16" fill="${p.paper}"`);
   r(0.5, 0.5, 959, 519, `rx="16" fill="none" stroke="${p.rule}"`);
 
   t(40, 48, 'ZCODE-AGENT · ONE TASK, FROM CONTRACT TO HANDBACK', { size: 11, fill: p.muted, spacing: 2.2 });
-  out.push(`<text x="40" y="94" font-family="${DISPLAY}" font-size="36" font-weight="700" textLength="860" lengthAdjust="spacingAndGlyphs"><tspan fill="${p.agent}">Your agent decides.</tspan><tspan dx="10" fill="${p.flash}">GLM-5.3 builds and checks. Flash looks.</tspan></text>`);
+  t(920, 48, 'also in your editor: zcode-agent acp', { size: 11, fill: p.look, anchor: 'end' });
+  out.push(`<text x="40" y="94" font-family="${DISPLAY}" font-size="36" font-weight="700" textLength="860" lengthAdjust="spacingAndGlyphs"><tspan fill="${p.agent}">Your agent decides.</tspan><tspan dx="10" fill="${p.flash}">GLM-5.3 builds and checks.</tspan><tspan dx="10" fill="${p.look}">Flash looks.</tspan></text>`);
 
   // Your agent: sparse on purpose.
   r(40, 132, 220, 300, `rx="12" fill="${p.card}" stroke="${p.agent}" stroke-width="1.5"`);
@@ -96,7 +97,7 @@ function svg(p) {
   };
   item((x0) => build(x0, 22, ly, 12), 'build');
   item((x0) => check(x0 + 10, ly), 'checks');
-  item((x0) => r(x0, ly, 22, 12, `rx="2" fill="url(#hatch)" stroke="${p.flash}" stroke-width="1"`), 'fresh Flash session reads screenshots');
+  item((x0) => r(x0, ly, 22, 12, `rx="2" fill="url(#hatch)" stroke="${p.look}" stroke-width="1"`), 'fresh Flash session reads screenshots');
   item((x0) => r(x0 + 0.75, ly + 0.75, 20.5, 10.5, `rx="2" fill="none" stroke="${p.flash}" stroke-width="1.5" stroke-dasharray="4 3"`), 'repair');
 
   // The one thin line back: the handback.

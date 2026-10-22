@@ -37,9 +37,9 @@
 <text x="442" y="239" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="1.2" text-anchor="start" fill="#A19DBA">MODEL</text>
 <rect x="508" y="222" width="76" height="26" rx="13" fill="#5CC596" stroke="#5CC596" stroke-width="1.5"/>
 <text x="546" y="239.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="0" text-anchor="middle" fill="#1D1C28">GLM-5.3</text>
-<rect x="592" y="222" width="120" height="26" rx="13" fill="#1D1C28" stroke="#5CC596" stroke-width="1.5"/>
+<rect x="592" y="222" width="120" height="26" rx="13" fill="#1D1C28" stroke="#63C3E6" stroke-width="1.5"/>
 <text x="652" y="239.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" text-anchor="middle" fill="#ECEAF6">GLM-5.3-Flash</text>
-<text x="726" y="239" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="start" fill="#A19DBA">Flash sees images</text>
+<text x="726" y="239" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="start" fill="#63C3E6">Flash sees images</text>
 <text x="442" y="277" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="1.2" text-anchor="start" fill="#A19DBA">EFFORT</text>
 <rect x="508" y="260" width="46" height="26" rx="13" fill="#1D1C28" stroke="#5CC596" stroke-width="1.5"/>
 <text x="531" y="277.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" text-anchor="middle" fill="#ECEAF6">low</text>

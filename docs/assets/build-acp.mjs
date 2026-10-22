@@ -47,17 +47,17 @@ function svg(p) {
   t(902, 158, 'defaults: GLM-5.3 · high · Ask', { size: 11, fill: p.muted, anchor: 'end' });
 
   // Pickers: the filled chip is the default.
-  const chip = (x, y, label, on) => {
+  const chip = (x, y, label, on, c = p.flash) => {
     const w = Math.round(label.length * 7.4 + 24);
-    r(x, y, w, 26, `rx="13" fill="${on ? p.flash : p.card}" stroke="${p.flash}" stroke-width="1.5"`);
+    r(x, y, w, 26, `rx="13" fill="${on ? c : p.card}" stroke="${c}" stroke-width="1.5"`);
     t(x + w / 2, y + 17.5, label, { size: 13, font: SANS, weight: on ? 700 : 400, fill: on ? p.card : p.ink, anchor: 'middle' });
     return x + w + 8;
   };
   const row = (y, name, labels, note) => {
     t(442, y + 17, name, { size: 11, fill: p.muted, spacing: 1.2 });
     let x = 508;
-    labels.forEach(([label, on]) => { x = chip(x, y, label, on); });
-    if (note) t(x + 6, y + 17, note, { size: 11, fill: p.muted });
+    labels.forEach(([label, on]) => { x = chip(x, y, label, on, label === 'GLM-5.3-Flash' ? p.look : p.flash); });
+    if (note) t(x + 6, y + 17, note, { size: 11, fill: p.look });
   };
   row(184, 'MODE', [['Ask', true], ['Accept edits', false], ['Plan', false], ['Full access', false]]);
   row(222, 'MODEL', [['GLM-5.3', true], ['GLM-5.3-Flash', false]], 'Flash sees images');

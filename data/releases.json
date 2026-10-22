@@ -1,0 +1,36 @@
+[
+  {
+    "version": "1.2.1",
+    "date": "2026-10-14",
+    "notes": [
+      "Cache-bust README images so the docs site picks up new screenshots",
+      "Fix stale version string printed by --version"
+    ]
+  },
+  {
+    "version": "1.2.0",
+    "date": "2026-09-30",
+    "notes": [
+      "Default model now runs at effort high",
+      "New ACP diagram and refreshed README hero",
+      "Smaller npm package after dropping unused assets"
+    ]
+  },
+  {
+    "version": "1.1.0",
+    "date": "2026-09-08",
+    "notes": [
+      "Run as an ACP agent inside T3 Code, Zed and any ACP editor",
+      "Ship prompts and replies without the ZCode app login"
+    ]
+  },
+  {
+    "version": "1.0.0",
+    "date": "2026-08-19",
+    "notes": [
+      "First stable release of the standalone engine",
+      "No ZCode app login required",
+      "ACP support for editor integration"
+    ]
+  }
+]
