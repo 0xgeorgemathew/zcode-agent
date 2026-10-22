@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1
+
+The README drawings (hero and ACP) load with a `?v=1.2.1` query, so GitHub and npm refetch them instead of showing the images cached before 1.2.0. No code changes.
+
 ## 1.2.0
 
 **GLM-5.3 at effort high is the default**, in the CLI and in `zcode-agent acp`. Both models stay available everywhere: `--model flash` (or the model picker in an ACP client) switches to GLM-5.3-Flash.
