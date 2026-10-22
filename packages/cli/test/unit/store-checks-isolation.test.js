@@ -162,6 +162,6 @@ test('argv: task flags, session flags and defaults parse without spawning anythi
   assert.deepEqual(parseArgv(['resume', 'page-2', 'use', 'blue']).prompts, ['page-2', 'use', 'blue']);
   const run = parseArgv(['hello', 'status']);
   assert.equal(run.command, 'run', 'only the first word can be a command');
-  assert.equal(run.flags.model, 'GLM-5.3-Flash');
-  assert.equal(run.flags.effort, 'max');
+  assert.equal(run.flags.model, 'GLM-5.3');
+  assert.equal(run.flags.effort, 'high');
 });

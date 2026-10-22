@@ -1,26 +1,26 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/hero-dark.svg">
-    <img src="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/hero-light.svg" width="960" alt="Your agent (Claude Code, Codex or any agent with a shell) writes the decisions and a task contract. zcode-agent runs parallel GLM-5.3-Flash sessions that build, run their own checks, repair failures and have a fresh session judge screenshots. One handback line returns to your agent.">
+    <img src="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/hero-light.svg" width="960" alt="Your agent (Claude Code, Codex or any agent with a shell) writes the decisions and a task contract. zcode-agent runs parallel GLM-5.3 sessions that build, run their own checks and repair failures, and has a fresh GLM-5.3-Flash session judge screenshots. One handback line returns to your agent.">
   </picture>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/zcode-agent"><img src="https://img.shields.io/npm/v/zcode-agent.svg?color=2E2A7A&label=npm" alt="npm version"></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A522.13-2E2A7A" alt="node 22.13 or later">
-  <img src="https://img.shields.io/badge/model-GLM--5.3--Flash-1C7C54" alt="runs on GLM-5.3-Flash">
+  <img src="https://img.shields.io/badge/models-GLM--5.3%20%C2%B7%20GLM--5.3--Flash-1C7C54" alt="runs on GLM-5.3 and GLM-5.3-Flash">
   <a href="https://github.com/0xgeorgemathew/zcode-agent/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-2E2A7A" alt="MIT license"></a>
 </p>
 
 # zcode-agent
 
-zcode-agent is a command-line executor for any agent that can run a shell command: Claude Code, Codex, or your own. Your agent writes the decisions and a task contract. zcode-agent builds it with GLM-5.3-Flash, runs your checks itself, repairs what fails, and has a separate Flash session that never saw the code look at screenshots of the result. It returns one line of JSON. Your agent never reads the diff, re-runs the tests or opens a screenshot, so its expensive tokens go to decisions and exceptions.
+zcode-agent is a command-line executor for any agent that can run a shell command: Claude Code, Codex, or your own. Your agent writes the decisions and a task contract. zcode-agent builds it with GLM-5.3, runs your checks itself, repairs what fails, and has a separate GLM-5.3-Flash session that never saw the code look at screenshots of the result. It returns one line of JSON. Your agent never reads the diff, re-runs the tests or opens a screenshot, so its expensive tokens go to decisions and exceptions.
 
 | | does | never does |
 |---|---|---|
 | **Your agent** | product, design and logic decisions; splits the work; answers questions | writes code, re-runs checks, looks at screenshots |
-| **zcode-agent** (GLM-5.3-Flash) | builds inside the paths it owns, runs subagents in parallel, runs the checks, fixes failures | invents anything user-visible the decisions left open, commits, deploys |
-| **The verifier** (a fresh Flash session) | serves the app, screenshots every viewport, quotes the text it can read, judges each criterion | edits files, trusts the DOM over the pixels |
+| **zcode-agent** (GLM-5.3, or Flash with `--model flash`) | builds inside the paths it owns, runs subagents in parallel, runs the checks, fixes failures | invents anything user-visible the decisions left open, commits, deploys |
+| **The verifier** (a fresh GLM-5.3-Flash session) | serves the app, screenshots every viewport, quotes the text it can read, judges each criterion | edits files, trusts the DOM over the pixels |
 
 &nbsp;
 
@@ -186,14 +186,14 @@ Flags cover the common fields. For a larger handoff, pass `--task contract.json`
 
 ## Models and effort
 
-Every command runs on GLM-5.3-Flash at effort `max` unless you pass a flag. Flash reads images, so the executor can check its own UI and the verifier can judge screenshots. `--model glm-5.3` is an override for work that needs the larger model, and it cannot read images.
+Every command runs on GLM-5.3 at effort `high` unless you pass a flag, in `zcode-agent acp` as well as on the command line. Both models are always available: `--model flash` switches to GLM-5.3-Flash, which is cheaper and faster and, unlike GLM-5.3, can read images. The visual verifier always runs on Flash, so `--visual` works on either model. Pass `--model flash` when the executor should look at its own screenshots too.
 
 | flag | values | default |
 |---|---|---|
-| `--model` | `glm-5.3-flash`, `glm-5.3` | Flash |
-| `--effort` | `low`, `high`, `max` | `max` |
+| `--model` | `glm-5.3`, `glm-5.3-flash` | GLM-5.3 |
+| `--effort` | `low`, `high`, `max` | `high` |
 
-`--model` also takes the short names `flash`, `5.3-flash` and `53f` for Flash, and `5.3` and `53` for GLM-5.3. A contract can set `"model"` and `"effort"`, and flags override it. A resumed session keeps its model and effort unless you pass the flags again. Any other model or an unsupported effort exits 2 before anything starts.
+`--model` also takes the short names `5.3` and `53` for GLM-5.3, and `flash`, `5.3-flash` and `53f` for Flash. A contract can set `"model"` and `"effort"`, and flags override it. A resumed session keeps its model and effort unless you pass the flags again. Any other model or an unsupported effort exits 2 before anything starts.
 
 &nbsp;
 
@@ -274,6 +274,13 @@ The counts come from each session's own engine database and include the executor
 
 ## Use it in T3 Code, Zed or any ACP client
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/acp-dark.svg">
+    <img src="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/acp-light.svg" width="960" alt="An ACP client such as T3 Code or Zed sends prompts and answers to zcode-agent over stdio. zcode-agent streams text, diffs and the plan back and asks before edits and commands. Mode, model and effort are pickers; the defaults are GLM-5.3, effort high and Ask mode.">
+  </picture>
+</p>
+
 `zcode-agent acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com) (v1) on stdio, so an ACP client drives GLM-5.3 directly: you chat with it, approve its edits and commands, and watch its tool calls, diffs and plan as they happen. `zcode-agent-acp` is the same command for clients that take only an executable. Key, MCP servers and skills work the same way as for `task`.
 
 **T3 Code** (a build with the ACP Registry provider): install zcode-agent globally, then add a provider in Settings → Providers. Choose **ACP Registry**, set **ACP source** to **Local command** and **Executable override** to `zcode-agent-acp`. To set it in `~/.t3/userdata/settings.json` instead:
@@ -289,7 +296,7 @@ The counts come from each session's own engine database and include the executor
 }
 ```
 
-T3 Code then offers GLM-5.3-Flash and GLM-5.3, with **Mode** and **Effort** pickers. Its runtime modes map onto the agent's approvals: in full access T3 answers every approval itself, and in approval-required it asks you. T3's plan mode switches the agent to its read-only Plan mode.
+T3 Code then offers GLM-5.3 (the default, at effort high) and GLM-5.3-Flash, with **Mode** and **Effort** pickers. Its runtime modes map onto the agent's approvals: in full access T3 answers every approval itself, and in approval-required it asks you. T3's plan mode switches the agent to its read-only Plan mode.
 
 **Zed** (`settings.json`):
 
@@ -313,7 +320,7 @@ What the client gets:
 - **Picker updates.** Mode, model and effort as session config options; switching model keeps the effort when the new model supports it.
 - **Usage.** Context use and the session's GLM cost so far at API list price, after every turn.
 - **Sessions.** `session/list` and `session/load`: a session reopens in a new process with its history replayed. Every ACP session is a zcode-agent session (`kind: "acp"`), so `zcode-agent status`, `watch` and `cost` include it.
-- **Inputs.** Images (saved to the session's tmp dir for GLM-5.3-Flash to read), embedded files and file links in prompts. Your client's MCP servers (stdio, HTTP, SSE) are added to the session.
+- **Inputs.** Images (saved to the session's tmp dir; GLM-5.3 cannot read them, so the prompt says so and suggests GLM-5.3-Flash), embedded files and file links in prompts. Your client's MCP servers (stdio, HTTP, SSE) are added to the session.
 - **Cancel.** Stops the running turn and its tools.
 
 The engine starts at the first prompt, not at `session/new`, so client probes cost nothing and leave no session behind. Flags set the defaults for new sessions: `--mode`, `--model`, `--effort`, `--hermetic` (fastest start: none of the app's MCP servers to connect), `--no-browser`, `--mcp`, `--skills`, `--timeout-ms` (per prompt; default none). `ZCODE_ACP_MODE` sets the default mode for clients that take no arguments, and `ZCODE_ACP_LOG=<file>` logs every frame. Questions the model would ask through a form are asked in its reply instead, because ACP v1 has no form UI.
@@ -384,8 +391,8 @@ The brief lists only failing checks (`checksPassed` counts the rest), unmet visu
 | `--serve` | task: the command that serves the app on `$ZCODE_PORT` |
 | `--max-repairs` | task and resume: repair turns after failures. Default: 2 |
 | `--check-timeout-ms` | task and resume: time limit per check. Default: 300000 |
-| `--model` | `glm-5.3-flash` (default) or `glm-5.3` |
-| `--effort` | `low`, `high` or `max` (default) |
+| `--model` | `glm-5.3` (default) or `glm-5.3-flash` |
+| `--effort` | `low`, `high` (default) or `max` |
 | `--timeout-ms` | the whole run, checks and repairs included. Default: 10 min for run, 2 h for task |
 | `--session` | run: continue by zcode-agent id or engine `sess_` id |
 | `--profile` | agent: the subagent profile. Default: `general-purpose` |

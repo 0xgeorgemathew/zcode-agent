@@ -368,7 +368,7 @@ class Agent {
       this.send(s, { sessionUpdate: 'current_mode_update', currentModeId: value });
     } else if (configId === 'model') {
       const model = normalizeModel(value);
-      if (!model) throw new AcpError(ERR.invalidParams, `unknown model "${value}" (GLM-5.3-Flash, GLM-5.3)`);
+      if (!model) throw new AcpError(ERR.invalidParams, `unknown model "${value}" (GLM-5.3, GLM-5.3-Flash)`);
       s.model = model;
       s.effort = map.effortFor(model, s.effort, opts);
     } else if (configId === 'effort') {

@@ -23,7 +23,7 @@ test('config options: mode, model and the efforts the model accepts', () => {
     ['effort', 'thought_level', 'select', 'max'],
   ]);
   assert.deepEqual(opts[0].options.map((o) => o.value), ['build', 'edit', 'plan', 'yolo']);
-  assert.deepEqual(opts[1].options.map((o) => o.value), ['GLM-5.3-Flash', 'GLM-5.3']);
+  assert.deepEqual(opts[1].options.map((o) => o.value), ['GLM-5.3', 'GLM-5.3-Flash']);
   assert.deepEqual(opts[2].options.map((o) => o.value), ['low', 'high', 'max']);
   assert.equal(map.effortFor('GLM-5.3', 'medium', { builtinConfig: '/nonexistent' }), 'max', 'an unsupported effort falls back to the highest');
   assert.equal(map.effortFor('GLM-5.3', 'low', { builtinConfig: '/nonexistent' }), 'low');
@@ -220,7 +220,7 @@ test('acp: session/new is free — a probe that never prompts leaves no session 
     assert.match(s.sessionId, /^zc-[0-9a-f]{8}$/);
     assert.deepEqual(s.modes.availableModes.map((m) => m.id), ['build', 'edit', 'plan', 'yolo']);
     assert.equal(s.modes.currentModeId, 'build');
-    assert.deepEqual(s.configOptions.map((o) => o.currentValue), ['build', 'GLM-5.3-Flash', 'max']);
+    assert.deepEqual(s.configOptions.map((o) => o.currentValue), ['build', 'GLM-5.3', 'high']);
     const rel = await a.call('session/new', { cwd: 'relative/dir', mcpServers: [] });
     assert.equal(rel.error.code, -32602);
     await a.close();
@@ -282,7 +282,7 @@ test('acp: a prompt streams text, tools, plan, title and usage, and is a zcode-a
     assert.equal(mine[7].update.content.text, 'done');
     const usage = mine[8].update;
     assert.equal(usage.used, 5020);
-    assert.equal(usage.size, 200000);
+    assert.equal(usage.size, 1000000, 'GLM-5.3 context window');
     assert.equal(usage.cost.currency, 'USD');
 
     const record = JSON.parse(fs.readFileSync(path.join(fake.root, 'sessions', sessionId, 'session.json'), 'utf8'));
@@ -294,7 +294,7 @@ test('acp: a prompt streams text, tools, plan, title and usage, and is a zcode-a
     assert.deepEqual(sent.filter((l) => l.method === 'session/setMode').map((l) => l.params.mode), [], 'created in build already');
     const send = sent.find((l) => l.method === 'session/send');
     assert.equal(send.params.content, 'make hello.txt');
-    assert.equal(send.params.modelSelection.modelId, 'GLM-5.3-Flash');
+    assert.deepEqual([send.params.modelSelection.modelId, send.params.modelSelection.options.reasoningLevel], ['GLM-5.3', 'high'], 'GLM-5.3 at high by default');
     const home = fake.log().find((l) => l.turnStarted).home;
     assert.match(fs.readFileSync(path.join(home, '.zcode', 'AGENTS.md'), 'utf8'), /Agent Client Protocol/, 'the interactive instructions, not the executor\'s');
 
@@ -369,9 +369,10 @@ test('acp: mode, model and effort switch per session; the engine follows', async
     await a.ok('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'one' }] });
     const set = await a.ok('session/set_config_option', { sessionId, configId: 'mode', value: 'yolo' });
     assert.equal(set.configOptions.find((o) => o.id === 'mode').currentValue, 'yolo');
-    await a.ok('session/set_config_option', { sessionId, configId: 'model', value: 'GLM-5.3' });
+    const flash = await a.ok('session/set_config_option', { sessionId, configId: 'model', value: 'GLM-5.3-Flash' });
+    assert.deepEqual(flash.configOptions.map((o) => o.currentValue), ['yolo', 'GLM-5.3-Flash', 'high'], 'the effort level carries over to Flash');
     const eff = await a.ok('session/set_config_option', { sessionId, configId: 'effort', value: 'low' });
-    assert.deepEqual(eff.configOptions.map((o) => o.currentValue), ['yolo', 'GLM-5.3', 'low']);
+    assert.deepEqual(eff.configOptions.map((o) => o.currentValue), ['yolo', 'GLM-5.3-Flash', 'low']);
     const badEffort = await a.call('session/set_config_option', { sessionId, configId: 'effort', value: 'medium' });
     assert.equal(badEffort.error.code, -32602);
     await a.ok('session/set_mode', { sessionId, modeId: 'edit' });
@@ -380,9 +381,9 @@ test('acp: mode, model and effort switch per session; the engine follows', async
     const log = fake.log().filter((l) => l.method);
     assert.deepEqual(log.filter((l) => l.method === 'session/setMode').map((l) => l.params.mode), ['yolo', 'edit']);
     const sends = log.filter((l) => l.method === 'session/send');
-    assert.deepEqual(sends.map((l) => [l.params.modelSelection.modelId, l.params.modelSelection.options.reasoningLevel]), [['GLM-5.3-Flash', 'max'], ['GLM-5.3', 'low']]);
+    assert.deepEqual(sends.map((l) => [l.params.modelSelection.modelId, l.params.modelSelection.options.reasoningLevel]), [['GLM-5.3', 'high'], ['GLM-5.3-Flash', 'low']]);
     const record = JSON.parse(fs.readFileSync(path.join(fake.root, 'sessions', sessionId, 'session.json'), 'utf8'));
-    assert.deepEqual([record.model, record.effort, record.acp.mode], ['GLM-5.3', 'low', 'edit']);
+    assert.deepEqual([record.model, record.effort, record.acp.mode], ['GLM-5.3-Flash', 'low', 'edit']);
     await a.close();
   } finally {
     fake.cleanup();

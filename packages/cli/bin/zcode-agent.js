@@ -2,7 +2,7 @@
 'use strict';
 // zcode — CLI entry: argv parsing + command dispatch. Parsing rejects bad
 // input (exit 2) before any engine spawn or session record exists.
-const { normalizeModel, unknownModelMessage, normalizeEffort, EFFORT_LEVELS, DEFAULT_MODEL } = require('../lib/models.js');
+const { normalizeModel, unknownModelMessage, normalizeEffort, EFFORT_LEVELS, DEFAULT_MODEL, DEFAULT_EFFORT } = require('../lib/models.js');
 
 const USAGE = `usage:
   zcode-agent task [options] <objective…>      execute a task contract, verify it, hand back
@@ -95,10 +95,10 @@ acp (zcode-agent acp):
                         --skills, --no-skills, --inherit-desktop
 
 execution:
-  --model <id>          glm-5.3 | glm-5.3-flash (+aliases). default: glm-5.3-flash
+  --model <id>          glm-5.3 | glm-5.3-flash (+aliases). default: glm-5.3
   --effort <level>      low | high | max for both models (zcode-agent doctor lists the
                         engine's levels per model); an unsupported level exits 2
-                        before any spawn. default: max
+                        before any spawn. default: high
   --timeout-ms <n>      whole invocation incl. checks/repairs (default 600000;
                         task default 7200000 = 2 h)
   --profile <name>      subagent profile (agent command; default general-purpose)
@@ -179,7 +179,7 @@ function parseArgv(argv) {
     given: new Set(),
     flags: {
       model: DEFAULT_MODEL,
-      effort: 'max',
+      effort: DEFAULT_EFFORT,
       cwd: process.cwd(),
       json: false,
       fresh: false,

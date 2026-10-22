@@ -5,7 +5,7 @@
 // are unset, and nothing animates — the feed is append-only lines, so a
 // non-interactive log reads exactly like the terminal did.
 //
-//   ▸ zcode zc-1a2b3c4d  task  GLM-5.3-Flash · effort max   session header
+//   ▸ zcode zc-1a2b3c4d  task  GLM-5.3 · effort high   session header
 //   ● executing                                             phase
 //   → Edit · ✓ Edit · ✗ Bash                                tools (dim)
 //   ⇢ subagent started / returned                           subagents

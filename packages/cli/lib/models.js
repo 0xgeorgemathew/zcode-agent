@@ -5,7 +5,8 @@
 
 const fs = require('node:fs');
 
-const DEFAULT_MODEL = 'GLM-5.3-Flash';
+const DEFAULT_MODEL = 'GLM-5.3';
+const DEFAULT_EFFORT = 'high';
 
 // Case-insensitive aliases → official ids (exact ids pass through verbatim;
 // they are exactly "GLM-5.3" / "GLM-5.3-Flash").
@@ -21,8 +22,8 @@ const ALIASES = new Map([
 
 const SUPPORTED = ['glm-5.3', 'glm-5.3-flash'];
 
-// Effort enum per the bundle's schema (DESIGN §8). `max` is the default and
-// the only guaranteed-portable choice across both models.
+// Effort enum per the bundle's schema (DESIGN §8). `high` is the default;
+// `low|high|max` are the levels both models accept.
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 function normalizeEffort(input) {
@@ -171,6 +172,7 @@ module.exports = {
   effortProblem,
   FALLBACK_LEVELS,
   DEFAULT_MODEL,
+  DEFAULT_EFFORT,
   normalizeModel,
   unknownModelMessage,
   normalizeEffort,

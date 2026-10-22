@@ -28,7 +28,7 @@ a stable, lockable headless surface:
 | Hard requirement | Where satisfied |
 |---|---|
 | GLM 5.3 / GLM 5.3 Flash **only**, others rejected with a clear error | §7 model allowlist at the wrapper layer (exit 2); scratch registry registers only `zai-api` |
-| Default reasoning effort = `max` | §8 — sent on every turn in both live-proven wire locations |
+| Default reasoning effort = `high` (`max` until 1.2.0) | §8 — sent on every turn in both live-proven wire locations |
 | Subagent support (launches a subagent that completes real work) | §11 `zai-code agent` command; verified programmatically via `session/subagents` RPC + on-disk artifacts; runs in yolo mode so tool side effects are auto-approved (§9.1) |
 | npm-publish ready | §13 — `files` allowlist, `bin`, `engines`, zero deps; `test/pack.test.js` guards the tarball |
 | Functional tests only, real API, no mocks | §12 — `node:test`, no mock layers, 4 tests hit the live API |
@@ -294,14 +294,16 @@ Two independent locks, so "GLM 5.3 / Flash only" holds even if one leaks:
    must be the exact official uppercase forms — `zai-api` gets NO case
    normalization from the engine (research: `modelRegistration`).
 
-Default model: **GLM-5.3-Flash** (cheap/fast default; the acceptance-grade
-GLM-5.3 is one `--model glm-5.3` away — matches "most testing on Flash").
+Default model: **GLM-5.3** at effort **high** (since 1.2.0, in the CLI and in
+`zcode-agent acp`; until then the default was GLM-5.3-Flash at `max`, with
+GLM-5.3 one `--model glm-5.3` away). GLM-5.3-Flash stays one `--model flash`
+away, and the visual verifier always uses it, because GLM-5.3 cannot see images.
 
 ---
 
 ## 8. Effort control
 
-- Default `--effort max`. Accepted values `low|medium|high|xhigh|max`
+- Default `--effort high` (1.2.0; it was `max`). Accepted values `low|medium|high|xhigh|max`
   (normalized lowercase; enum per bundle schema, research: `effortControl`).
 - Sent on **every turn in both live-proven locations**, because omitting it
   fails the turn with "Reasoning level is required for zai-api/GLM-5.3-Flash"

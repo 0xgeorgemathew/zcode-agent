@@ -18,7 +18,7 @@ const store = require('./store.js');
 const { buildContract } = require('./taskspec.js');
 const { ContractError } = require('./contract.js');
 const { workspaceRoot, normalizeOwns, ownsOverlap, OwnershipError } = require('./workspace.js');
-const { normalizeModel, normalizeEffort, effortProblem, unknownModelMessage, DEFAULT_MODEL } = require('./models.js');
+const { normalizeModel, normalizeEffort, effortProblem, unknownModelMessage, DEFAULT_MODEL, DEFAULT_EFFORT } = require('./models.js');
 const { buildBrief } = require('./brief.js');
 
 const BIN = path.join(__dirname, '..', 'bin', 'zcode-agent.js');
@@ -167,7 +167,7 @@ function checkPlan(r, { name, state } = {}) {
     if (!model) {
       problems.push(`session "${s.id}": ${unknownModelMessage(contract.model)}`);
     } else {
-      const effort = contract.effort === null ? 'max' : normalizeEffort(contract.effort);
+      const effort = contract.effort === null ? DEFAULT_EFFORT : normalizeEffort(contract.effort);
       if (!effort) problems.push(`session "${s.id}": contract effort "${contract.effort}" is not valid.`);
       else {
         const p = effortProblem(model, effort, { source: `session "${s.id}" effort` });

@@ -450,21 +450,22 @@ test('parseVisualBlock is lenient: last block wins, met strings normalize, junk 
 
 // --- Flash by default everywhere ----------------------------------------------
 
-test('every entry point defaults to GLM-5.3-Flash; plan sessions inherit it; the plan may still override', () => {
+test('every entry point defaults to GLM-5.3 at high; plan sessions inherit it; the plan may still override', () => {
   const { buildInvocation } = require('../../lib/commands/exec.js');
   for (const cmd of ['run', 'task', 'agent']) {
-    assert.equal(buildInvocation(parseArgv([cmd, 'go'])).model, 'GLM-5.3-Flash', cmd);
+    const inv = buildInvocation(parseArgv([cmd, 'go']));
+    assert.deepEqual([inv.model, inv.effort], ['GLM-5.3', 'high'], cmd);
   }
   const plans = require('../../lib/plan.js');
   const file = path.join(fake.base, 'plan.json');
-  fs.writeFileSync(file, JSON.stringify({ cwd: fake.work, sessions: [{ id: 'a', objective: 'x' }, { id: 'b', objective: 'y', model: 'glm-5.3' }] }));
+  fs.writeFileSync(file, JSON.stringify({ cwd: fake.work, sessions: [{ id: 'a', objective: 'x' }, { id: 'b', objective: 'y', model: 'flash' }] }));
   const r = plans.resolvePlan(file);
   const [a, b] = plans.sessionList(r.plan);
-  assert.equal(plans.sessionInvocation(r, 'p', a).model, 'GLM-5.3-Flash');
-  assert.equal(plans.sessionInvocation(r, 'p', b).model, 'GLM-5.3');
+  assert.equal(plans.sessionInvocation(r, 'p', a).model, 'GLM-5.3');
+  assert.equal(plans.sessionInvocation(r, 'p', b).model, 'GLM-5.3-Flash');
 });
 
-test('resume keeps the session model; a model-less settings file falls back to Flash', async () => {
+test('resume keeps the session model; a model-less settings file falls back to the default model', async () => {
   fake.setScript({ turns: [{ response: done() }, { response: done() }] });
   await execute(invocation(fake, { id: 'rs-1', checks: [] }));
   const { readSettings } = require('../../lib/executor.js');
@@ -485,8 +486,8 @@ test('copied agent profiles follow the session model; the live files are untouch
   const home = path.join(fake.base, 'h');
   buildEngineHome({ home, root: fake.root, key: 'k', live: fake.live, inheritDesktop: true });
   const got = (n) => fs.readFileSync(path.join(home, '.zcode', 'agents', n), 'utf8');
-  assert.match(got('a.md'), /model: "account:zai-individual-coding-plan\/GLM-5\.3-Flash"/, 'default session model is Flash');
-  assert.match(got('b.md'), /model: "custom:account%3Azai-individual-coding-plan:GLM-5\.3-Flash"/);
+  assert.match(got('a.md'), /model: "account:zai-individual-coding-plan\/GLM-5\.3"/, 'default session model is GLM-5.3');
+  assert.match(got('b.md'), /model: "custom:account%3Azai-individual-coding-plan:GLM-5\.3"/);
   assert.equal(got('d.md'), pins['d.md']);
   assert.equal(got('e.md'), pins['e.md']);
   buildEngineHome({ home, root: fake.root, key: 'k', live: fake.live, model: 'GLM-5.3', inheritDesktop: true });

@@ -74,7 +74,7 @@ test('LIVE plain mode: thinking streams as a distinct block; stdout stays the an
   preconditions();
   const work = mkdtempSync(path.join(tmpdir(), 'zcode-reason-plain-'));
   try {
-    const { code, stdout, stderr } = await cli(['--cwd', work, PROMPT], {
+    const { code, stdout, stderr } = await cli(['--model', 'flash', '--effort', 'max', '--cwd', work, PROMPT], {
       cwd: work,
       timeoutMs: 240000,
     });

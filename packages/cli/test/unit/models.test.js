@@ -53,13 +53,13 @@ const run = (args, opts) => cli(args, { cwd: fake.work, timeoutMs: 60000, ...opt
 test('--effort medium is refused with exit 2 and one line, before any engine spawn', async () => {
   const r = await run(['task', '--effort', 'medium', '--id', 'e-1', 'Do it']);
   assert.equal(r.code, 2);
-  assert.equal(r.stderr, 'zcode-agent: --effort medium is not supported by GLM-5.3-Flash (supported: low, high, max).\n');
+  assert.equal(r.stderr, 'zcode-agent: --effort medium is not supported by GLM-5.3 (supported: low, high, max).\n');
   assert.deepEqual(fake.log(), [], 'the engine was never spawned');
   assert.equal(require('../../lib/store.js').readSession('e-1'), null, 'no session record either');
 
-  const r53 = await run(['run', '--model', 'glm-5.3', '--effort', 'xhigh', 'hi']);
+  const r53 = await run(['run', '--model', 'flash', '--effort', 'xhigh', 'hi']);
   assert.equal(r53.code, 2);
-  assert.match(r53.stderr, /--effort xhigh is not supported by GLM-5\.3 \(supported: low, high, max\)/);
+  assert.match(r53.stderr, /--effort xhigh is not supported by GLM-5\.3-Flash \(supported: low, high, max\)/);
   assert.deepEqual(fake.log(), []);
 });
 
@@ -68,12 +68,12 @@ test('contract effort is validated too (JSON contract, with and without a --mode
   fs.writeFileSync(file, JSON.stringify({ objective: 'x', effort: 'medium' }));
   const r = await run(['task', '--task', file]);
   assert.equal(r.code, 2);
-  assert.equal(r.stderr, 'zcode-agent: contract effort medium is not supported by GLM-5.3-Flash (supported: low, high, max).\n');
+  assert.equal(r.stderr, 'zcode-agent: contract effort medium is not supported by GLM-5.3 (supported: low, high, max).\n');
 
-  fs.writeFileSync(file, JSON.stringify({ objective: 'x', model: 'glm-5.3', effort: 'xhigh' }));
+  fs.writeFileSync(file, JSON.stringify({ objective: 'x', model: 'flash', effort: 'xhigh' }));
   const r2 = await run(['task', '--task', file]);
   assert.equal(r2.code, 2);
-  assert.match(r2.stderr, /contract effort xhigh is not supported by GLM-5\.3 /);
+  assert.match(r2.stderr, /contract effort xhigh is not supported by GLM-5\.3-Flash /);
   assert.deepEqual(fake.log(), []);
 
   // A flag overrides the contract's effort and is itself what gets validated.

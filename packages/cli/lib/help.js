@@ -8,8 +8,8 @@ const SESSION = `  --id <id>        name the session (existing id is never re-ru
   --cwd <dir>      workspace (default: current dir)
   --owns <path>    repeatable: paths this session may change (default: whole workspace)
   --allow-overlap  start despite overlapping ownership`;
-const EXEC = `  --model <id>     glm-5.3 | glm-5.3-flash (default glm-5.3-flash)
-  --effort <lvl>   low | high | max (default max)
+const EXEC = `  --model <id>     glm-5.3 | glm-5.3-flash (default glm-5.3)
+  --effort <lvl>   low | high | max (default high)
   --mcp <json|@f>  add MCP servers (repeatable)   --mcp-inherit   --no-browser
   --skills <dir>   add skills (repeatable)        --no-skills
   --inherit-desktop  give the executor the desktop's AGENTS.md, skills, plugins
@@ -126,8 +126,8 @@ client run GLM-5.3 through it. Each ACP session is a zcode-agent session
   --mode <mode>    default for new sessions: build (ask before edits and
                    commands) | edit (accept edits) | plan | yolo (full access)
                    default build (or $ZCODE_ACP_MODE)
-  --model <id>     glm-5.3 | glm-5.3-flash (default glm-5.3-flash)
-  --effort <lvl>   low | high | max (default max)
+  --model <id>     glm-5.3 | glm-5.3-flash (default glm-5.3)
+  --effort <lvl>   low | high | max (default high)
   --timeout-ms <n> per prompt (default: none)
   --mcp <json|@f>  add MCP servers (repeatable)   --hermetic   --no-browser
   --skills <dir>   add skills (repeatable)        --no-skills

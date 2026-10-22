@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520">
+<title>zcode-agent acp: an ACP client such as T3 Code or Zed sends prompts to zcode-agent, which streams text, diffs and plans back, asks before edits and commands, and offers Mode, Model and Effort pickers with GLM-5.3 at high effort by default.</title>
+<defs><marker id="head-agent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2E2A7A"/></marker><marker id="head-flash" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#1C7C54"/></marker></defs>
+<rect x="0" y="0" width="960" height="520" rx="16" fill="#F3F2F8"/>
+<rect x="0.5" y="0.5" width="959" height="519" rx="16" fill="none" stroke="#D9D6E8"/>
+<text x="40" y="48" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="2.2" text-anchor="start" fill="#5C5875">ZCODE-AGENT ACP · A CHAT SESSION, FROM PROMPT TO REPLY</text>
+<text x="40" y="94" font-family="Avenir Next Condensed, Roboto Condensed, Arial Narrow, Helvetica Neue, sans-serif" font-size="36" font-weight="700" textLength="808" lengthAdjust="spacingAndGlyphs"><tspan fill="#2E2A7A">Your editor chats.</tspan><tspan dx="10" fill="#1C7C54">GLM-5.3 does the work, and asks first.</tspan></text>
+<rect x="40" y="132" width="230" height="300" rx="12" fill="#FFFFFF" stroke="#2E2A7A" stroke-width="1.5"/>
+<text x="58" y="158" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" letter-spacing="1.6" text-anchor="start" fill="#2E2A7A">YOUR CLIENT</text>
+<text x="58" y="190" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="16" font-weight="400" letter-spacing="0" text-anchor="start" fill="#1E1D29">T3 Code</text>
+<text x="58" y="214" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="16" font-weight="400" letter-spacing="0" text-anchor="start" fill="#1E1D29">Zed</text>
+<text x="58" y="238" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="16" font-weight="400" letter-spacing="0" text-anchor="start" fill="#1E1D29">any ACP client</text>
+<path d="M58 268 H252" fill="none" stroke="#D9D6E8" stroke-width="1" />
+<text x="58" y="292" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="start" fill="#5C5875">you choose</text>
+<text x="58" y="316" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" text-anchor="start" fill="#1E1D29">mode, model and effort</text>
+<text x="58" y="338" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" text-anchor="start" fill="#1E1D29">approve or deny each action</text>
+<text x="58" y="360" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" text-anchor="start" fill="#1E1D29">cancel at any time</text>
+<text x="58" y="412" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="start" fill="#5C5875">sessions reopen with history</text>
+<path d="M270 190 H416" fill="none" stroke="#2E2A7A" stroke-width="2" marker-end="url(#head-agent)"/>
+<text x="343" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="middle" fill="#2E2A7A">prompt, answers</text>
+<path d="M416 232 H270" fill="none" stroke="#1C7C54" stroke-width="2" marker-end="url(#head-flash)"/>
+<text x="343" y="222" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="middle" fill="#1C7C54">text, diffs, plan</text>
+<text x="343" y="262" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="middle" fill="#5C5875">ACP v1 over stdio</text>
+<text x="343" y="280" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" letter-spacing="0" text-anchor="middle" fill="#2E2A7A">zcode-agent-acp</text>
+<rect x="424" y="132" width="496" height="300" rx="12" fill="#FFFFFF" stroke="#1C7C54" stroke-width="1.5"/>
+<text x="442" y="158" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" letter-spacing="1.6" text-anchor="start" fill="#1C7C54">ZCODE-AGENT ACP</text>
+<text x="902" y="158" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="end" fill="#5C5875">defaults: GLM-5.3 · high · Ask</text>
+<text x="442" y="201" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="1.2" text-anchor="start" fill="#5C5875">MODE</text>
+<rect x="508" y="184" width="46" height="26" rx="13" fill="#1C7C54" stroke="#1C7C54" stroke-width="1.5"/>
+<text x="531" y="201.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="0" text-anchor="middle" fill="#FFFFFF">Ask</text>
+<rect x="562" y="184" width="113" height="26" rx="13" fill="#FFFFFF" stroke="#1C7C54" stroke-width="1.5"/>
+<text x="618.5" y="201.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" text-anchor="middle" fill="#1E1D29">Accept edits</text>
+<rect x="683" y="184" width="54" height="26" rx="13" fill="#FFFFFF" stroke="#1C7C54" stroke-width="1.5"/>
+<text x="710" y="201.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" text-anchor="middle" fill="#1E1D29">Plan</text>
+<rect x="745" y="184" width="105" height="26" rx="13" fill="#FFFFFF" stroke="#1C7C54" stroke-width="1.5"/>
+<text x="797.5" y="201.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" text-anchor="middle" fill="#1E1D29">Full access</text>
+<text x="442" y="239" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="1.2" text-anchor="start" fill="#5C5875">MODEL</text>
+<rect x="508" y="222" width="76" height="26" rx="13" fill="#1C7C54" stroke="#1C7C54" stroke-width="1.5"/>
+<text x="546" y="239.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="0" text-anchor="middle" fill="#FFFFFF">GLM-5.3</text>
+<rect x="592" y="222" width="120" height="26" rx="13" fill="#FFFFFF" stroke="#1C7C54" stroke-width="1.5"/>
+<text x="652" y="239.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" text-anchor="middle" fill="#1E1D29">GLM-5.3-Flash</text>
+<text x="726" y="239" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="start" fill="#5C5875">Flash sees images</text>
+<text x="442" y="277" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="1.2" text-anchor="start" fill="#5C5875">EFFORT</text>
+<rect x="508" y="260" width="46" height="26" rx="13" fill="#FFFFFF" stroke="#1C7C54" stroke-width="1.5"/>
+<text x="531" y="277.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" text-anchor="middle" fill="#1E1D29">low</text>
+<rect x="562" y="260" width="54" height="26" rx="13" fill="#1C7C54" stroke="#1C7C54" stroke-width="1.5"/>
+<text x="589" y="277.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="0" text-anchor="middle" fill="#FFFFFF">high</text>
+<rect x="624" y="260" width="46" height="26" rx="13" fill="#FFFFFF" stroke="#1C7C54" stroke-width="1.5"/>
+<text x="647" y="277.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" text-anchor="middle" fill="#1E1D29">max</text>
+<path d="M442 306 H902" fill="none" stroke="#D9D6E8" stroke-width="1" />
+<text x="442" y="332" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="400" letter-spacing="0" text-anchor="start" fill="#5C5875">in Ask mode</text>
+<rect x="442" y="346" width="96" height="16" rx="3" fill="#1C7C54"/>
+<path d="M538 354 H560" fill="none" stroke="#1C7C54" stroke-width="1.2" />
+<circle cx="569" cy="354" r="9" fill="#FFFFFF" stroke="#2E2A7A" stroke-width="1.8"/>
+<path d="M565.5 354 l2.5 2.5 l4.5 -5.5" fill="none" stroke="#2E2A7A" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M578 354 H600" fill="none" stroke="#1C7C54" stroke-width="1.2" />
+<rect x="600" y="346" width="70" height="16" rx="3" fill="#1C7C54"/>
+<path d="M670 354 H692" fill="none" stroke="#1C7C54" stroke-width="1.2" />
+<circle cx="701" cy="354" r="9" fill="#FFFFFF" stroke="#2E2A7A" stroke-width="1.8"/>
+<path d="M697.5 354 l2.5 2.5 l4.5 -5.5" fill="none" stroke="#2E2A7A" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M710 354 H732" fill="none" stroke="#1C7C54" stroke-width="1.2" />
+<rect x="732" y="346" width="60" height="16" rx="3" fill="#1C7C54"/>
+<path d="M792 354 H814" fill="none" stroke="#1C7C54" stroke-width="1.2" />
+<rect x="814" y="346" width="88" height="16" rx="3" fill="#1C7C54"/>
+<text x="442" y="386" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="start" fill="#5C5875">read</text>
+<text x="600" y="386" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="start" fill="#5C5875">edit</text>
+<text x="732" y="386" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="start" fill="#5C5875">run</text>
+<text x="814" y="386" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="start" fill="#5C5875">reply</text>
+<text x="569" y="336" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" letter-spacing="0" text-anchor="middle" fill="#2E2A7A">asks you</text>
+<text x="701" y="336" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" letter-spacing="0" text-anchor="middle" fill="#2E2A7A">asks you</text>
+<text x="442" y="416" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="start" fill="#5C5875">It edits files, runs commands and reports cost each turn.</text>
+<text x="40" y="467" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700" letter-spacing="0" text-anchor="start" fill="#2E2A7A">set up:</text>
+<text x="120" y="467" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="400" letter-spacing="0" text-anchor="start" fill="#1E1D29">npm i -g zcode-agent</text>
+<text x="330" y="467" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="400" letter-spacing="0" text-anchor="start" fill="#1E1D29">then point the client at the command zcode-agent-acp</text>
+<text x="40" y="504" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="400" letter-spacing="0" text-anchor="start" fill="#5C5875">Sessions also appear in zcode-agent status, watch and cost.</text>
+</svg>

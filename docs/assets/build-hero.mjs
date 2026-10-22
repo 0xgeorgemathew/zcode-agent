@@ -5,14 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PALETTES = {
-  light: { paper: '#F3F2F8', card: '#FFFFFF', rule: '#D9D6E8', ink: '#1E1D29', muted: '#5C5875', agent: '#2E2A7A', flash: '#1C7C54', flashSoft: '#DDF0E6', fail: '#A8601A' },
-  dark: { paper: '#15141D', card: '#1D1C28', rule: '#33314A', ink: '#ECEAF6', muted: '#A19DBA', agent: '#A9A4F2', flash: '#5CC596', flashSoft: '#1E3A2E', fail: '#E3A15A' },
-};
-const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-const SANS = '-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif';
-const DISPLAY = 'Avenir Next Condensed, Roboto Condensed, Arial Narrow, Helvetica Neue, sans-serif';
-const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+import { PALETTES, MONO, SANS, DISPLAY, esc } from './palette.mjs';
 
 function svg(p) {
   const out = [];
@@ -38,7 +31,7 @@ function svg(p) {
   r(0.5, 0.5, 959, 519, `rx="16" fill="none" stroke="${p.rule}"`);
 
   t(40, 48, 'ZCODE-AGENT · ONE TASK, FROM CONTRACT TO HANDBACK', { size: 11, fill: p.muted, spacing: 2.2 });
-  out.push(`<text x="40" y="94" font-family="${DISPLAY}" font-size="36" font-weight="700"><tspan fill="${p.agent}">Your agent decides.</tspan><tspan fill="${p.flash}"> GLM-5.3-Flash builds, checks and looks.</tspan></text>`);
+  out.push(`<text x="40" y="94" font-family="${DISPLAY}" font-size="36" font-weight="700" textLength="860" lengthAdjust="spacingAndGlyphs"><tspan fill="${p.agent}">Your agent decides.</tspan><tspan dx="10" fill="${p.flash}">GLM-5.3 builds and checks. Flash looks.</tspan></text>`);
 
   // Your agent: sparse on purpose.
   r(40, 132, 220, 300, `rx="12" fill="${p.card}" stroke="${p.agent}" stroke-width="1.5"`);
@@ -56,7 +49,7 @@ function svg(p) {
   // zcode-agent: dense on purpose.
   r(330, 132, 590, 300, `rx="12" fill="${p.card}" stroke="${p.flash}" stroke-width="1.5"`);
   t(348, 158, 'ZCODE-AGENT', { size: 11, fill: p.flash, spacing: 1.6, weight: 700 });
-  t(902, 158, 'parallel sessions, many cheap requests', { size: 11, fill: p.muted, anchor: 'end' });
+  t(902, 158, 'GLM-5.3 at effort high · parallel sessions', { size: 11, fill: p.muted, anchor: 'end' });
 
   const lanes = [
     { y: 196, label: 'session' },
@@ -102,8 +95,8 @@ function svg(p) {
     x += label.length * CH + 14;
   };
   item((x0) => build(x0, 22, ly, 12), 'build');
-  item((x0) => check(x0 + 10, ly), 'its own checks');
-  item((x0) => r(x0, ly, 22, 12, `rx="2" fill="url(#hatch)" stroke="${p.flash}" stroke-width="1"`), 'fresh session reads screenshots');
+  item((x0) => check(x0 + 10, ly), 'checks');
+  item((x0) => r(x0, ly, 22, 12, `rx="2" fill="url(#hatch)" stroke="${p.flash}" stroke-width="1"`), 'fresh Flash session reads screenshots');
   item((x0) => r(x0 + 0.75, ly + 0.75, 20.5, 10.5, `rx="2" fill="none" stroke="${p.flash}" stroke-width="1.5" stroke-dasharray="4 3"`), 'repair');
 
   // The one thin line back: the handback.
@@ -112,7 +105,7 @@ function svg(p) {
   t(330, 467, '{"status":"completed","files":["…"],"checksPassed":3,"visualMet":"6/6"}', { size: 13, fill: p.ink });
   t(40, 504, 'Questions come back the same way, with options and a recommendation. Your agent answers in one line.', { size: 11, fill: p.muted });
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520">\n<title>zcode-agent: your agent writes the decisions and a task contract; zcode-agent runs parallel GLM-5.3-Flash sessions that build, run checks, repair and have a fresh session judge screenshots; one handback line returns.</title>\n${out.join('\n')}\n</svg>\n`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520">\n<title>zcode-agent: your agent writes the decisions and a task contract; zcode-agent runs parallel GLM-5.3 sessions that build, run checks and repair, and has a fresh GLM-5.3-Flash session judge screenshots; one handback line returns.</title>\n${out.join('\n')}\n</svg>\n`;
 }
 
 for (const [name, palette] of Object.entries(PALETTES)) writeFileSync(join(here, `hero-${name}.svg`), svg(palette));

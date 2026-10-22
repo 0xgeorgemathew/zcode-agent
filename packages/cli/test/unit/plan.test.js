@@ -66,7 +66,7 @@ test('plan check: cycles, unknown after, duplicate ids, concurrent owns overlap,
     .some((p) => /"b" and "c" can run concurrently/.test(p)));
 
   const effort = problemsOf({ effort: 'medium', sessions: [sess('a'), sess('b', { effort: 'xhigh' })] });
-  assert.equal(effort.filter((p) => /not supported by GLM-5\.3-Flash \(supported: low, high, max\)/.test(p)).length, 2, effort.join('\n'));
+  assert.equal(effort.filter((p) => /not supported by GLM-5\.3 \(supported: low, high, max\)/.test(p)).length, 2, effort.join('\n'));
   assert.ok(problemsOf({ sessions: [sess('a', { model: 'gpt-4' })] }).some((p) => /unknown model/.test(p)));
   assert.ok(problemsOf({ sessions: [sess('a', { bogus: 1 })] }).some((p) => /session "a": unknown task contract key/.test(p)));
   assert.ok(problemsOf({ sessions: [sess('a', { decisions: ['@missing.md'] })] }).some((p) => /could not be read/.test(p)));

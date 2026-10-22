@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0
+
+**GLM-5.3 at effort high is the default**, in the CLI and in `zcode-agent acp`. Both models stay available everywhere: `--model flash` (or the model picker in an ACP client) switches to GLM-5.3-Flash.
+
+### Changed
+
+- **Default model and effort.** Every command (`run`, `task`, `agent`, plans, resumed sessions without saved settings) now starts on GLM-5.3 at effort `high`. It was GLM-5.3-Flash at `max`. Contracts and plans that set `model` or `effort`, and the flags, still win.
+- **Model picker.** ACP clients list GLM-5.3 first, then GLM-5.3-Flash; switching model keeps the effort level.
+- **Images need Flash.** GLM-5.3 cannot read images, so with the new default the executor does not look at its own screenshots. The visual verifier is unaffected: it always runs a fresh GLM-5.3-Flash session. Pass `--model flash` when the executor itself should see images; an ACP prompt with images on GLM-5.3 says so and suggests Flash.
+- **README.** New drawing for the ACP section (`docs/assets/acp-*.svg`, built by `build-acp.mjs`), and the hero now says GLM-5.3 builds and checks while Flash looks. Shared colours and fonts moved to `docs/assets/palette.mjs`. The orchestrator skills no longer tell the agent to expect Flash.
+- Live tests that assert Flash (`run-flash`, `effort-flag`, `reasoning`, `agent`) pass `--model flash` explicitly.
+
 ## 1.1.0
 
 **ACP support.** `zcode-agent acp` (or `zcode-agent-acp`) is an Agent Client Protocol (v1) agent on stdio, so T3 Code, Zed and any other ACP client chat with GLM-5.3 directly. Verified inside T3 Code through its ACP Registry provider (local command), with GLM-5.3-Flash reading, writing and running commands.

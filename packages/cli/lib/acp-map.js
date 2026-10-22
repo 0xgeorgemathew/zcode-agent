@@ -27,8 +27,8 @@ const MODES = [
 const MODE_IDS = MODES.map((m) => m.id);
 
 const MODELS = [
+  { value: 'GLM-5.3', name: 'GLM-5.3', description: 'Default; larger model, text only' },
   { value: 'GLM-5.3-Flash', name: 'GLM-5.3-Flash', description: 'Fast and cheap; sees images' },
-  { value: 'GLM-5.3', name: 'GLM-5.3', description: 'Larger model; text only' },
 ];
 
 // Context windows by model (engine session/create settings; fallback).

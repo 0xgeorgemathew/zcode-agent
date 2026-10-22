@@ -1,13 +1,13 @@
 ---
 name: zcode-agent
-description: Delegate scoped implementation work to the zcode-agent CLI (cheap GLM-5.3-Flash executor: sees images, has Playwright; an independent vision verifier judges UI) and consume its compact verified handback. Use when you are orchestrating: you make the product, design and logic decisions once, then zcode-agent implements, tests, visually verifies and repairs — in one session with subagent units, several parallel sessions, or a dependency plan — while you spend tokens only on decisions and exceptions.
+description: Delegate scoped implementation work to the zcode-agent CLI (cheap GLM-5.3 executor with Playwright; an independent GLM-5.3-Flash vision verifier judges UI) and consume its compact verified handback. Use when you are orchestrating: you make the product, design and logic decisions once, then zcode-agent implements, tests, visually verifies and repairs — in one session with subagent units, several parallel sessions, or a dependency plan — while you spend tokens only on decisions and exceptions.
 ---
 
 # Operating zcode-agent as an executor
 
 zcode-agent is a CLI execution engine. You decide; it builds. It implements a scoped task in its own session, runs your checks itself, has a fresh, independent vision verifier screenshot and judge UI when you ask, repairs failures within a budget, and returns a small structured handback.
 
-**The point is cost.** Your tokens are the expensive ones; GLM-5.3-Flash's are cheap. Your tokens go to decisions and exceptions. Everything mechanical — writing code, running builds and tests, reading diffs, looking at screenshots, fixing small failures — is zcode-agent's. If you are doing any of that after dispatch, you are paying twice.
+**The point is cost.** Your tokens are the expensive ones; GLM-5.3's are cheap. Your tokens go to decisions and exceptions. Everything mechanical — writing code, running builds and tests, reading diffs, looking at screenshots, fixing small failures — is zcode-agent's. If you are doing any of that after dispatch, you are paying twice.
 
 Check readiness once per machine: `zcode-agent doctor` (exit 3 → no key: the user runs `zcode-agent login` or sets `ZAI_API_KEY`; with the ZCode app installed its key, MCP servers and skills are used automatically). Don't run `--help` or a bare `zcode-agent status`: everything you need is here.
 
@@ -81,7 +81,7 @@ Parallel sessions cost you nothing extra while they run: one background `wait` o
 
 Environment: by default the executor gets the ZCode app's MCP servers and user skills (OAuth-only remote servers excluded) plus zcode-agent's own executor instructions; `--hermetic` gives it only your `--mcp` servers and `--skills`. Leave the default unless a run needs to be reproducible on another machine.
 
-Model and effort: don't pass `--model`. Everything runs on GLM-5.3-Flash by default (it sees images): sessions, units, plans, the verifier. Use `--model glm-5.3` only when the user asks for it; it can't see images. `--effort low|high|max` (default `max`). Other values are refused before anything starts.
+Model and effort: don't pass `--model` or `--effort`. Everything runs on GLM-5.3 at effort `high` by default: sessions, units and plans. The visual verifier always runs on GLM-5.3-Flash, because only Flash can see images. Use `--model flash` when the user asks for it, or when the executor itself should look at screenshots or attached images (GLM-5.3 can't); it is cheaper and faster too. `--effort low|high|max`. Other values are refused before anything starts.
 
 ## Running
 
