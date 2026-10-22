@@ -196,8 +196,12 @@ async function cancel(parsed) {
     process.exit(0);
   };
   if (!view.live) return report('not running');
+  // An ACP session's pid is the `zcode-agent acp` host, which serves its
+  // client's other sessions too: stop only this session's engine. The turn
+  // fails in the client; its next prompt starts a new engine.
+  const acp = view.kind === 'acp';
   try {
-    process.kill(view.pid, 'SIGTERM');
+    process.kill(acp ? -view.enginePid : view.pid, 'SIGTERM');
   } catch {
     /* exited in between */
   }
@@ -207,7 +211,7 @@ async function cancel(parsed) {
     view = store.viewSession(store.readSession(id));
     if (!view.live) return report('cancelled');
   }
-  for (const target of [view.pid, -view.enginePid]) {
+  for (const target of [acp ? null : view.pid, -view.enginePid]) {
     if (!target) continue;
     try {
       process.kill(target, 'SIGKILL'); // negative = the engine's process group

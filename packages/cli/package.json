@@ -1,10 +1,11 @@
 {
   "name": "zcode-agent",
-  "version": "1.0.0",
-  "description": "Cheap, verified execution for Claude Code and Codex: your orchestrator decides, GLM-5.3-Flash builds, tests and visually verifies in headless ZCode sessions (parallel sessions, subagents, dependency plans) and hands back a compact result. Uses your ZCode app's key, MCP servers and skills, or runs standalone.",
+  "version": "1.1.0",
+  "description": "Cheap, verified execution for Claude Code and Codex: your orchestrator decides, GLM-5.3-Flash builds, tests and visually verifies in headless ZCode sessions (parallel sessions, subagents, dependency plans) and hands back a compact result. Also an ACP agent for T3 Code, Zed and any Agent Client Protocol client. Uses your ZCode app's key, MCP servers and skills, or runs standalone.",
   "license": "MIT",
   "bin": {
-    "zcode-agent": "bin/zcode-agent.js"
+    "zcode-agent": "bin/zcode-agent.js",
+    "zcode-agent-acp": "bin/zcode-agent-acp.js"
   },
   "engines": {
     "node": ">=22.13"
@@ -40,7 +41,11 @@
     "coding-agent",
     "subagent",
     "headless",
-    "mcp"
+    "mcp",
+    "acp",
+    "agent-client-protocol",
+    "t3code",
+    "zed"
   ],
   "repository": {
     "type": "git",

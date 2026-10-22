@@ -30,6 +30,9 @@ const USAGE = `usage:
                                                engine, key, inherited setup and browser report
   zcode-agent skills [install|uninstall] [claude|codex]
                                                install the orchestrator skills (default: status)
+  zcode-agent acp [--mode m] [--model id] [--effort l]
+                                               serve the Agent Client Protocol on stdio (T3 Code,
+                                               Zed, any ACP client; see "acp" below)
 
 session:
   --id <id>             name the session (letters, digits, . _ -); default zc-<random>.
@@ -82,6 +85,14 @@ plan (zcode-agent plan run <plan.json>):
   --detach              plan run/resume: supervise in a background process
   --id <name>           plan name (default: the file's basename)
   --session <id>        plan resume: only this session
+
+acp (zcode-agent acp):
+  --mode <mode>         default permission mode of new sessions: build (ask before
+                        edits and commands) | edit (accept edits) | plan | yolo
+                        (full access). default: build; clients switch it per session
+  --timeout-ms <n>      per prompt (default: none)
+                        also: --model, --effort, --mcp, --hermetic, --no-browser,
+                        --skills, --no-skills, --inherit-desktop
 
 execution:
   --model <id>          glm-5.3 | glm-5.3-flash (+aliases). default: glm-5.3-flash
@@ -154,7 +165,9 @@ function parseMcpSpec(value) {
   return parsed;
 }
 
-const COMMANDS = new Set(['run', 'task', 'agent', 'resume', 'status', 'list', 'wait', 'watch', 'cost', 'cancel', 'login', 'doctor', 'skills', 'result', 'plan', '__plan', '__exec']);
+const COMMANDS = new Set(['run', 'task', 'agent', 'resume', 'status', 'list', 'wait', 'watch', 'cost', 'cancel', 'login', 'doctor', 'skills', 'result', 'plan', 'acp', '__plan', '__exec']);
+// The flags `zcode-agent acp` accepts (session defaults for the ACP agent).
+const ACP_FLAGS = new Set(['model', 'effort', 'mode', 'timeoutMs', 'mcpSpecs', 'mcpInherit', 'hermetic', 'noBrowser', 'skillsDirs', 'noSkills', 'inheritDesktop']);
 const TASK_ONLY = new Set(['task', 'accept', 'check', 'file', 'context', 'touch', 'maxRepairs', 'checkTimeoutMs', 'decisions', 'units', 'visual', 'viewports', 'serve', 'preflight']);
 const FULL_COMMANDS = new Set(['run', 'task', 'agent', 'resume', 'wait', 'result', '__exec']);
 const START_ONLY = new Set(['id', 'label', 'owns', 'touch', 'preflight', 'allowOverlap', 'mcpSpecs', 'mcpInherit', 'hermetic', 'noBrowser', 'skillsDirs', 'noSkills', 'inheritDesktop', 'profile', 'cwd']);
@@ -212,6 +225,7 @@ function parseArgv(argv) {
       all: false,
       app: false,
       installBrowser: false,
+      mode: undefined,
     },
   };
   const valueFlags = new Map([
@@ -219,6 +233,7 @@ function parseArgv(argv) {
     ['--timeout-ms', 'timeoutMs'], ['-p', 'prompt'], ['--prompt', 'prompt'], ['--session', 'session'],
     ['--id', 'id'], ['--label', 'label'], ['--task', 'task'], ['--max-repairs', 'maxRepairs'],
     ['--check-timeout-ms', 'checkTimeoutMs'], ['--serve', 'serve'], ['--plan', 'plan'], ['--stall-min', 'stallMin'],
+    ['--mode', 'mode'],
   ]);
   const listFlags = new Map([
     ['--mcp', 'mcpSpecs'], ['--skills', 'skillsDirs'], ['--accept', 'accept'], ['--check', 'check'],
@@ -313,6 +328,13 @@ function parseArgv(argv) {
       if (out.given.has(key)) fail(2, `--${flagName(key)} cannot change on resume; it is fixed when the session starts.`);
     }
   }
+  if (cmd === 'acp') {
+    for (const key of out.given) {
+      if (!ACP_FLAGS.has(key)) fail(2, `--${flagName(key)} is not valid with "zcode-agent acp".`);
+    }
+  } else if (out.given.has('mode')) {
+    fail(2, '--mode is only valid with "zcode-agent acp".');
+  }
   if (out.given.has('all') && cmd !== 'status') fail(2, '--all is only valid with "zcode-agent status".');
   for (const k of ['plan', 'stallMin']) {
     if (out.given.has(k) && cmd !== 'watch') fail(2, `--${flagName(k)} is only valid with "zcode-agent watch".`);
@@ -401,13 +423,15 @@ async function main() {
       return require('../lib/commands/doctor.js')(parsed);
     case 'skills':
       return require('../lib/commands/skills.js')(parsed);
+    case 'acp':
+      return require('../lib/commands/acp.js')(parsed);
     default:
       return fail(2, `unknown command "${parsed.command}" (see zcode-agent --help).`);
   }
 }
 
 // Exported before main() runs: the plan supervisor reuses parseArgv.
-module.exports = { parseArgv, USAGE };
+module.exports = { parseArgv, USAGE, main };
 
 if (require.main === module) {
   main().catch((err) => {

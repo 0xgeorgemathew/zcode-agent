@@ -35,7 +35,7 @@ class TurnError extends Error {
 }
 
 class AppServerClient {
-  constructor({ nodeBin, enginePath, env, cwd, scrub = (s) => s }) {
+  constructor({ nodeBin, enginePath, env, cwd, scrub = (s) => s, interactions = null }) {
     this.nodeBin = nodeBin;
     this.enginePath = enginePath;
     this.env = env;
@@ -47,6 +47,9 @@ class AppServerClient {
     this.onFrame = null; // (frame) => void for every notification
     this.dead = false;
     this.engineStderr = '';
+    // ACP (lib/acp.js): {permission(params), userInput(params)} → the
+    // engine's reply, asked of a person instead of the headless policy.
+    this.interactions = interactions;
   }
 
   start() {
@@ -135,13 +138,21 @@ class AppServerClient {
       reply(RUNTIME_PREFERENCES);
       return;
     }
+    if (this.interactions && (method === 'interaction/requestPermission' || method === 'interaction/requestUserInput')) {
+      const ask = method === 'interaction/requestPermission' ? this.interactions.permission : this.interactions.userInput;
+      Promise.resolve()
+        .then(() => ask(frame.params || {}))
+        .then(reply, (err) => replyError(-32000, `zcode-agent: ${err && err.message ? err.message : err}`));
+      return;
+    }
     if (method === 'interaction/requestPermission') {
-      // Allow-schema pinned from the engine bundle's own headless broker:
-      // {decision:"allow", reason, resolvedAt}.
-      reply({
+      // The reply schema is strict ({decision, reason?, modifiedInput?,
+      // permissionUpdates?}; live-probed 1.1: an extra resolvedAt made the
+      // engine deny the tool). The request's own "allow once" option carries
+      // a reply in exactly that shape.
+      reply(allowOnce(frame.params) || {
         decision: 'allow',
         reason: 'zcode-agent: headless auto-approve (yolo mode; --cwd is the blast radius)',
-        resolvedAt: new Date().toISOString(),
       });
       return;
     }
@@ -213,6 +224,13 @@ class AppServerClient {
       }
     }
   }
+}
+
+// The engine's reply for a permission request's "allow once" option, or null.
+function allowOnce(params) {
+  const options = (params && Array.isArray(params.options)) ? params.options : [];
+  const option = options.find((o) => o && o.kind === 'allow_once' && o.response);
+  return option ? option.response : null;
 }
 
 // --- turn orchestration -----------------------------------------------------
@@ -297,10 +315,11 @@ async function openSession(client, {
   effort,
   resumeSessionId = null,
   requiredMcp = [],
+  mode = 'yolo',
   onEvent = () => {},
   onMcpStatuses = () => {},
 }) {
-  const session = { sessionId: null, resumed: false, mode: null };
+  const session = { sessionId: null, resumed: false, mode: null, created: null };
   if (resumeSessionId) {
     const resumed = await client.request(
       'session/resume',
@@ -311,14 +330,15 @@ async function openSession(client, {
     session.sessionId = s.sessionId || resumeSessionId;
     session.resumed = true;
     session.mode = s.mode || null;
-    await client.request('session/setMode', { sessionId: session.sessionId, mode: 'yolo' }, { timeoutMs: 15000 });
-    session.mode = 'yolo';
+    session.created = resumed;
+    await client.request('session/setMode', { sessionId: session.sessionId, mode }, { timeoutMs: 15000 });
+    session.mode = mode;
   } else {
     const created = await client.request(
       'session/create',
       {
         workspace: { workspacePath, workspaceKey: workspaceKeyFor(workspacePath) },
-        mode: 'yolo',
+        mode,
         model: { providerId: 'zai-api', modelId, options: { reasoningLevel: effort } },
         thoughtLevel: effort,
         // Persist the session row NOW: the default (deferred) loses it to
@@ -330,11 +350,12 @@ async function openSession(client, {
     const s = created.session || created.value || {};
     session.sessionId = s.sessionId;
     session.mode = s.mode || null;
+    session.created = created;
     if (!session.sessionId) throw new TurnError('session/create returned no session.sessionId');
     // §9.1 mode ladder: create's mode param is not honored (live-probed).
-    if (s.mode !== 'yolo') {
-      await client.request('session/setMode', { sessionId: session.sessionId, mode: 'yolo' }, { timeoutMs: 15000 });
-      session.mode = 'yolo';
+    if (s.mode !== mode) {
+      await client.request('session/setMode', { sessionId: session.sessionId, mode }, { timeoutMs: 15000 });
+      session.mode = mode;
     }
   }
   await client.request(
@@ -360,6 +381,7 @@ async function runTurn(client, session, {
   signal = null,
   keepReasoning = false,
   onEvent = () => {},
+  onFrame = null,
 }) {
   const started = Date.now();
   const turn = {
@@ -400,6 +422,13 @@ async function runTurn(client, session, {
   client.onFrame = (frame) => {
     const method = frame.method;
     const params = frame.params || {};
+    if (onFrame) {
+      try {
+        onFrame(frame);
+      } catch {
+        /* a consumer's bug must not take down the engine reader */
+      }
+    }
     if (method === 'session/event') {
       const type = params.type;
       const payload = params.payload;
@@ -513,4 +542,5 @@ module.exports = {
   workspaceKeyFor,
   waitForMcp,
   RUNTIME_PREFERENCES,
+  allowOnce,
 };

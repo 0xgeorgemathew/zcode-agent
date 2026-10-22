@@ -358,6 +358,8 @@ const HOST_ONLY_SKILLS = new Set(['control-browser', 'zcode', 'zcode-agent']);
 // The executor instructions every engine HOME gets as ~/.zcode/AGENTS.md.
 // Named so that agents working on this repo don't read it as their own.
 const EXECUTOR_AGENTS_MD = path.join(__dirname, '..', 'assets', 'executor-agents.md');
+// `zcode-agent acp`: a person watches and approves in the client.
+const ACP_AGENTS_MD = path.join(__dirname, '..', 'assets', 'acp-agents.md');
 
 // Rewrites the frontmatter `model:` of an agent profile when it names
 // GLM-5.3 / GLM-5.3-Flash (any prefix: "account:x/GLM-5.3",
@@ -385,6 +387,7 @@ function buildEngineHome({
   inheritDesktop = false,
   profile = null,
   model = DEFAULT_MODEL,
+  instructions = EXECUTOR_AGENTS_MD,
 }) {
   const zdir = path.join(home, '.zcode');
   const v2 = path.join(zdir, 'v2');
@@ -449,7 +452,7 @@ function buildEngineHome({
   // minutes per session (0.7.1), so it is appended only with
   // --inherit-desktop.
   const agentsMd = path.join(zdir, 'AGENTS.md');
-  const parts = [fs.readFileSync(EXECUTOR_AGENTS_MD, 'utf8').trim()];
+  const parts = [fs.readFileSync(instructions, 'utf8').trim()];
   if (inheritDesktop && fs.existsSync(path.join(live, 'AGENTS.md'))) {
     parts.push(fs.readFileSync(path.join(live, 'AGENTS.md'), 'utf8').trim());
   }
@@ -609,6 +612,7 @@ module.exports = {
   inheritableMcpServers,
   needsOAuth,
   EXECUTOR_AGENTS_MD,
+  ACP_AGENTS_MD,
   DEFAULT_BROWSER_SERVER,
   PLAYWRIGHT_MCP_VERSION,
   readMcpHealth,

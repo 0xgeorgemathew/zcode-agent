@@ -4,7 +4,13 @@
 // no model, no network). Speaks the NDJSON frames lib/appserver.js expects
 // (DESIGN §9/§16). Behavior per session/send comes from the JSON file in
 // FAKE_ENGINE_SCRIPT: {turns:[{response, write:{path,content}, writes:[{path,content}], delayMs,
-// fail, hang, userInput, tool}], subagents:[…]}. The turn index persists in
+// fail, hang, userInput, tool, events:[{type,payload}], permission:{…params},
+// planApproval:{…params}, exitAfter}], subagents:[…], messages:[…],
+// messagesFail, createHangs}. `events` are sent
+// as session/event frames before the answer; `permission`/`planApproval`
+// send that server request and finish the turn only after the reply (the
+// reply is logged and its decision/action appended to the response). The
+// turn index persists in
 // FAKE_ENGINE_STATE so a resumed session (a new engine process) continues
 // the script. Every received method is appended to FAKE_ENGINE_LOG.
 const fs = require('node:fs');
@@ -30,6 +36,7 @@ const readState = () => {
 };
 const writeState = (s) => fs.writeFileSync(stateFile, JSON.stringify(s));
 let serverReq = 1;
+log({ enginePid: process.pid });
 let hangingTurn = null;
 
 const event = (sessionId, type, payload, extra = {}) =>
@@ -71,7 +78,25 @@ function runTurn(sessionId) {
     hangingTurn = sessionId;
     return;
   }
+  const ask = spec.permission
+    ? { method: 'interaction/requestPermission', params: spec.permission }
+    : spec.planApproval
+    ? { method: 'interaction/requestUserInput', params: { ...spec.planApproval, schema: { interaction: 'plan_approval', toolName: 'ExitPlanMode' } } }
+    : null;
+  if (ask) {
+    const id = `server-${++serverReq}`;
+    waiting.set(id, (reply) => finishTurn(sessionId, spec, reply));
+    send({ id, method: ask.method, params: { sessionId, ...ask.params } });
+    return;
+  }
+  finishTurn(sessionId, spec, null);
+}
+
+const waiting = new Map(); // server request id → continuation
+
+function finishTurn(sessionId, spec, reply) {
   setTimeout(() => {
+    for (const ev of spec.events || []) event(sessionId, ev.type, ev.payload, ev.extra || {});
     event(sessionId, 'model.streaming', { kind: 'reasoning_delta', delta: 'thinking…\n', done: false });
     if (spec.tool) {
       event(sessionId, 'tool.updated', { kind: 'started', toolName: spec.tool, toolCallId: 'tc1' });
@@ -86,14 +111,16 @@ function runTurn(sessionId) {
       send({ method: 'v4/telemetry/event', params: { kind: 'turn.terminal', status: 'failed', result: { error: spec.fail } } });
       return;
     }
-    event(sessionId, 'model.streaming', { kind: 'text_delta', delta: spec.response, done: true });
+    const answer = reply ? `${spec.response} [${(reply.result && (reply.result.decision || reply.result.action)) || 'error'}]` : spec.response;
+    event(sessionId, 'model.streaming', { kind: 'text_delta', delta: answer, done: true });
     event(sessionId, 'turn.completed', {
-      response: spec.response,
+      response: answer,
       resultType: 'success',
       usage: { inputTokens: 100, outputTokens: 10 },
       toolCallCount: spec.tool ? 1 : 0,
     });
     send({ method: 'v4/telemetry/event', params: { kind: 'turn.terminal', status: 'success' } });
+    if (spec.exitAfter) setTimeout(() => process.exit(0), 20); // the engine dies between turns
   }, spec.delayMs || 5);
 }
 
@@ -101,7 +128,12 @@ const rl = readline.createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   const msg = JSON.parse(line);
   if (msg.method === undefined) {
-    log({ reply: msg.id, error: msg.error ? msg.error.code : null });
+    log({ reply: msg.id, error: msg.error ? msg.error.code : null, result: msg.result });
+    const next = waiting.get(msg.id);
+    if (next) {
+      waiting.delete(msg.id);
+      next(msg);
+    }
     return; // a reply to one of our server requests
   }
   log({ method: msg.method, params: msg.params });
@@ -134,6 +166,10 @@ rl.on('line', (line) => {
     case 'session/stop':
       reply({});
       hangingTurn = null;
+      return;
+    case 'session/messages':
+      if (script.messagesFail) send({ id: msg.id, error: { code: -32603, message: 'fake: messages failed' } });
+      else reply({ messages: script.messages || [] });
       return;
     case 'session/subagents':
       reply({ running: [], ended: { items: script.subagents || [] } });

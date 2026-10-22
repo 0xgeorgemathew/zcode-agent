@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.0
+
+**ACP support.** `zcode-agent acp` (or `zcode-agent-acp`) is an Agent Client Protocol (v1) agent on stdio, so T3 Code, Zed and any other ACP client chat with GLM-5.3 directly. Verified inside T3 Code through its ACP Registry provider (local command), with GLM-5.3-Flash reading, writing and running commands.
+
+### Added
+
+- **`zcode-agent acp`**: `initialize`, `authenticate`, `session/new`, `session/load` (history replayed: user and agent messages, reasoning, tool calls, the last plan), `session/list` (by cwd), `session/prompt`, `session/cancel`, `session/set_mode`, `session/set_model`, `session/set_config_option` and `session/close`.
+  - **Updates sent:** message and thought chunks, tool calls (title, kind, locations, diffs for Write/Edit/MultiEdit, command output), the TodoWrite list as `plan`, `current_mode_update`, `config_option_update`, `session_info_update` (title) and `usage_update`. The usage update carries context used and size, plus the session's GLM cost at API list price.
+  - **Config options:** mode (`build` asks before edits and commands, `edit`, `plan`, `yolo`), model (GLM-5.3-Flash, GLM-5.3) and effort (the levels the model accepts).
+  - **Permissions:** engine permission requests become `session/request_permission`, with the engine's own options (allow once, always allow in this project, deny). ExitPlanMode becomes a switch-mode approval.
+  - **Prompt input:** images, embedded resources and resource links; the client's MCP servers (stdio, HTTP, SSE) are added to the session.
+  - **Lazy start:** the store record and the engine are created at the first prompt, so `session/new` probes leave nothing behind. No key → `session/new` fails with `auth_required`.
+- **Every ACP session is a zcode-agent session** (`kind: "acp"`), with its own engine HOME, `$ZCODE_PORT` and tmp dir. `status`, `watch` and `cost` include it. The session's `AGENTS.md` is `assets/acp-agents.md`, written for a person watching (ask in the reply, use TodoWrite, no external side effects), instead of the headless executor rules.
+- **`zcode-agent-acp` bin** for clients whose settings take only an executable (T3 Code's provider form). `--mode` and `ZCODE_ACP_MODE` set the default mode; `ZCODE_ACP_LOG=<file>` logs every frame.
+
+### Fixed
+
+- **Headless permission replies.** The reply carried an extra `resolvedAt`, which the engine's strict reply schema rejects. Live-probed: in any mode that asks, every tool was denied with "Permission request failed". yolo never asks, so 1.0 runs were unaffected. The reply is now the request's own allow-once response.
+
 ## 1.0.0
 
 Renamed to **zcode-agent** (npm `zcode-agent`, command `zcode-agent`, `npx zcode-agent …`), and it now runs anywhere: with the ZCode app it needs no login, without it the engine ships as a dependency. Everything else (task contracts, the independent verifier, plans, briefs) is unchanged. 0.7.0 and 0.7.1 were never published under the old name; their changes ship here.
