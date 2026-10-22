@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/hero-dark.svg?v=2">
-    <img src="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/hero-light.svg?v=2" width="960" alt="Your agent (Claude Code, Codex or any agent with a shell) writes the decisions and a task contract. zcode-agent runs parallel GLM-5.3 sessions that build, run their own checks and repair failures, and has a fresh GLM-5.3-Flash session judge screenshots. One handback line returns to your agent.">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/d5db74513374006362d70dd2fd380683c1c7cf2b/docs/assets/hero-dark.svg">
+    <img src="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/d5db74513374006362d70dd2fd380683c1c7cf2b/docs/assets/hero-light.svg" width="960" alt="Your agent (Claude Code, Codex or any agent with a shell) writes the decisions and a task contract. zcode-agent runs parallel GLM-5.3 sessions that build, run their own checks and repair failures, and has a fresh GLM-5.3-Flash session judge screenshots. One handback line returns to your agent.">
   </picture>
 </p>
 
@@ -276,8 +276,8 @@ The counts come from each session's own engine database and include the executor
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/acp-dark.svg?v=2">
-    <img src="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/main/docs/assets/acp-light.svg?v=2" width="960" alt="An ACP client such as T3 Code or Zed sends prompts and answers to zcode-agent over stdio. zcode-agent streams text, diffs and the plan back and asks before edits and commands. Mode, model and effort are pickers; the defaults are GLM-5.3, effort high and Ask mode.">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/d5db74513374006362d70dd2fd380683c1c7cf2b/docs/assets/acp-dark.svg">
+    <img src="https://raw.githubusercontent.com/0xgeorgemathew/zcode-agent/d5db74513374006362d70dd2fd380683c1c7cf2b/docs/assets/acp-light.svg" width="960" alt="An ACP client such as T3 Code or Zed sends prompts and answers to zcode-agent over stdio. zcode-agent streams text, diffs and the plan back and asks before edits and commands. Mode, model and effort are pickers; the defaults are GLM-5.3, effort high and Ask mode.">
   </picture>
 </p>
 

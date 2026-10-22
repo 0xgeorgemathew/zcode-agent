@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Drawings.** The hero gives GLM-5.3 (builds and checks, green) and GLM-5.3-Flash (the verifier, blue) their own colours, and mentions `zcode-agent acp`; the ACP drawing marks Flash the same way. The README image URLs now end in `?v=2`.
+- **Drawings.** The hero gives GLM-5.3 (builds and checks, green) and GLM-5.3-Flash (the verifier, blue) their own colours, and mentions `zcode-agent acp`; the ACP drawing marks Flash the same way. The README image URLs are pinned to a commit SHA, because raw.githubusercontent.com ignores a `?v=` query and kept serving the old file for up to five minutes.
 
 ## 1.2.1
 
