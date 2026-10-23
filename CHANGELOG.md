@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **README drawings redrawn.** Both drawings embed their fonts (IBM Plex subsets, about 30 KB, SIL OFL; `docs/assets/fonts`) instead of relying on the viewer's system fonts. The headlines are set at their natural width; before, they were squeezed to fit, which distorted them where Avenir Next Condensed was missing. The hero adds the task contract as your agent writes it, and labels its stages BUILD, CHECK and LOOK so the drawing no longer needs a legend. The repair is drawn as a loop, and the handback as a chip on the line home. The ACP drawing adds a prompt and an approval card, a picker row per setting, and a note that the engine starts when the session opens.
+
 ## 1.3.0
 
 Faster starts, for ACP sessions and CLI runs alike, and a leaner ACP context: sessions no longer carry the ZCode app's MCP servers by default.
