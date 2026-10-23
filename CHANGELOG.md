@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.3.1
+
+### Fixed
+
+- **`provider_config.json` without a `zai-api` rule no longer breaks every engine start** ([#2](https://github.com/0xgeorgemathew/zcode-agent/issues/2)). Signed in with a coding plan, the ZCode app keeps an empty `~/.zcode/v2/provider_config.json` (`providerRules: []`) and recreates it if deleted. 1.3.0 copied that file and threw `no zai-api rule found`, so `zcode-agent doctor` crashed and no ACP session could start its engine. Now a copy that has no `zai-api` rule, or can't be read, is replaced with the same config a machine without the app gets, holding the package's key. A copy that has the rule is still pruned to it and re-keyed, as before.
+
+### Changed
 
 - **README drawings redrawn.** Both drawings embed their fonts (IBM Plex subsets, about 30 KB, SIL OFL; `docs/assets/fonts`) instead of relying on the viewer's system fonts. The headlines are set at their natural width; before, they were squeezed to fit, which distorted them where Avenir Next Condensed was missing. The hero adds the task contract as your agent writes it, and labels its stages BUILD, CHECK and LOOK so the drawing no longer needs a legend. The repair is drawn as a loop, and the handback as a chip on the line home. The ACP drawing adds a prompt and an approval card, a picker row per setting, and a note that the engine starts when the session opens.
 

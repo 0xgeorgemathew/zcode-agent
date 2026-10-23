@@ -75,25 +75,25 @@ function listDir(dir) {
 // --- provider/key rewriting -----------------------------------------------------
 
 // Prune to exactly the zai-api rule and swap in the package key (§6.2 item 2).
+// Returns false, leaving the file for the caller to replace, when the copy
+// has no zai-api rule or can't be read: the ZCode app keeps an empty
+// provider_config.json (providerRules: []) when signed in with a coding
+// plan, and recreates it if deleted (1.3.1, issue #2).
 function rewriteProviderConfig(target, key) {
-  const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
+  const parsed = readJson(target);
   const rules =
+    parsed &&
     parsed.config &&
     parsed.config.providerConfigRules &&
     parsed.config.providerConfigRules.providerRules;
-  if (!Array.isArray(rules)) {
-    throw new Error(`unexpected provider_config.json shape at ${target}`);
-  }
-  const zaiRules = rules.filter((r) => r && r.providerId === 'zai-api');
-  if (zaiRules.length === 0) {
-    throw new Error(`no zai-api rule found in provider_config.json at ${target}`);
-  }
-  const rule = zaiRules[0];
+  const rule = Array.isArray(rules) && rules.find((r) => r && r.providerId === 'zai-api');
+  if (!rule) return false;
   rule.config = rule.config || {};
   rule.config.group = rule.config.group || 'standard-personal';
   rule.config.access = { type: 'api-key', apiKey: key };
   parsed.config.providerConfigRules.providerRules = [rule];
   writeJson600(target, parsed);
+  return true;
 }
 
 // Standalone (no app config to copy). modelConfigRules must be present,
@@ -510,11 +510,9 @@ function buildEngineHome({
     fs.copyFileSync(path.join(liveV2, entry.name), path.join(v2, entry.name));
   }
   const providerConfig = path.join(v2, 'provider_config.json');
-  const mode = v2Files.some((e) => e.name === 'provider_config.json')
-    ? 'copied-v2-top-level'
-    : 'synthesized';
+  const copied = v2Files.some((e) => e.name === 'provider_config.json');
+  const mode = copied && rewriteProviderConfig(providerConfig, key) ? 'copied-v2-top-level' : 'synthesized';
   if (mode === 'synthesized') writeJson600(providerConfig, synthesizedProviderConfig(key));
-  else rewriteProviderConfig(providerConfig, key);
 
   // cli/config.json: live copy (builtin:zai key swapped) + this run's MCP set.
   const cfg = readJson(path.join(live, 'cli', 'config.json')) || {};
