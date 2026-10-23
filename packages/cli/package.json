@@ -1,6 +1,6 @@
 {
   "name": "zcode-agent",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Cheap, verified execution for Claude Code and Codex: your orchestrator decides, GLM-5.3 builds and tests, and a GLM-5.3-Flash verifier checks the screenshots in headless ZCode sessions (parallel sessions, subagents, dependency plans) and hands back a compact result. Also an ACP agent for T3 Code, Zed and any Agent Client Protocol client. Uses your ZCode app's key, MCP servers and skills, or runs standalone.",
   "license": "MIT",
   "bin": {

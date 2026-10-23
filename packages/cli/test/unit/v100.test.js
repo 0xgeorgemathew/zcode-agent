@@ -111,6 +111,50 @@ test('standalone: the synthesized provider config carries modelConfigRules (the 
   assert.equal(pc.config.providerConfigRules.providerRules[0].config.access.apiKey, 'k');
 });
 
+test('an app provider_config.json without a zai-api rule is synthesized, not a crash (issue #2)', () => {
+  const { buildEngineHome } = require('../../lib/isolation.js');
+  const cases = {
+    empty: JSON.stringify({
+      schemaVersion: 1,
+      config: {
+        providerConfigRules: { providerRules: [] },
+        modelConfigRules: { providerModelRules: [], manualProviderModelRules: [] },
+      },
+    }),
+    otherProvider: JSON.stringify({ config: { providerConfigRules: { providerRules: [{ providerId: 'other' }] } } }),
+    oddShape: '{"config":{}}',
+    unparseable: '{',
+  };
+  for (const [name, text] of Object.entries(cases)) {
+    const live = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-live-'));
+    fs.mkdirSync(path.join(live, 'v2'));
+    fs.writeFileSync(path.join(live, 'v2', 'provider_config.json'), text);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-eh-'));
+    const built = buildEngineHome({ home, live, key: 'k', browser: false });
+    assert.equal(built.mode, 'synthesized', name);
+    const pc = JSON.parse(fs.readFileSync(path.join(home, '.zcode', 'v2', 'provider_config.json'), 'utf8'));
+    assert.deepEqual(pc.config.modelConfigRules, { providerModelRules: [], manualProviderModelRules: [] }, name);
+    assert.deepEqual(pc.config.providerConfigRules.providerRules.map((r) => [r.providerId, r.config.access.apiKey]), [['zai-api', 'k']], name);
+    assert.equal(fs.readFileSync(path.join(live, 'v2', 'provider_config.json'), 'utf8'), text, `${name}: live file untouched`);
+  }
+
+  // A real zai-api rule is still copied, pruned and re-keyed.
+  const live = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-live-'));
+  fs.mkdirSync(path.join(live, 'v2'));
+  fs.writeFileSync(path.join(live, 'v2', 'provider_config.json'), JSON.stringify({
+    config: {
+      providerConfigRules: { providerRules: [{ providerId: 'other' }, { providerId: 'zai-api', config: { group: 'g', access: { apiKey: 'old' } } }] },
+      modelConfigRules: { providerModelRules: ['m'] },
+    },
+  }));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-eh-'));
+  const built = buildEngineHome({ home, live, key: 'k', browser: false });
+  assert.equal(built.mode, 'copied-v2-top-level');
+  const pc = JSON.parse(fs.readFileSync(path.join(home, '.zcode', 'v2', 'provider_config.json'), 'utf8'));
+  assert.deepEqual(pc.config.providerConfigRules.providerRules, [{ providerId: 'zai-api', config: { group: 'g', access: { type: 'api-key', apiKey: 'k' } } }]);
+  assert.deepEqual(pc.config.modelConfigRules, { providerModelRules: ['m'] });
+});
+
 test('standalone: no app Playwright server means the pinned headless one', () => {
   const { effectiveMcpServers, DEFAULT_BROWSER_SERVER } = require('../../lib/isolation.js');
   const live = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-nolive-'));
