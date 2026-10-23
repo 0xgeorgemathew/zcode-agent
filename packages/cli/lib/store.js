@@ -65,15 +65,15 @@ function readJson(file) {
 
 // Claims the id atomically (mkdir fails if it exists) and writes the first
 // record. Throws SessionExistsError on collision — an orchestrator retrying
-// a start with the same --id never runs the work twice.
-function createSession(id, fields, env = process.env) {
-  fs.mkdirSync(sessionsDir(env), { recursive: true, mode: 0o700 });
-  const dir = sessionDir(id, env);
-  try {
-    fs.mkdirSync(dir, { mode: 0o700 });
-  } catch (err) {
-    if (err.code === 'EEXIST') throw new SessionExistsError(id);
-    throw err;
+// a start with the same --id never runs the work twice. `adopt`: the dir was
+// claimed earlier by reserveSessionDir (an ACP engine started ahead of the
+// first prompt); it is taken over when it holds no record yet.
+function createSession(id, fields, env = process.env, { adopt = false } = {}) {
+  const dir = adopt ? sessionDir(id, env) : reserveSessionDir(id, env);
+  if (adopt) {
+    if (fs.existsSync(path.join(dir, 'session.json'))) throw new SessionExistsError(id);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.rmSync(path.join(dir, RESERVED_MARK), { force: true });
   }
   const now = new Date().toISOString();
   const record = {
@@ -91,6 +91,50 @@ function createSession(id, fields, env = process.env) {
   };
   writeJsonAtomic(path.join(dir, 'session.json'), record);
   return record;
+}
+
+// A session dir without a record: invisible to status/list until
+// createSession(…, {adopt: true}). RESERVED_MARK holds the reserving pid,
+// so reapReserved can remove the dirs of processes that died before their
+// first prompt (an ACP client SIGKILLing the agent).
+const RESERVED_MARK = 'reserved.pid';
+
+function reserveSessionDir(id, env = process.env, { mark = false } = {}) {
+  fs.mkdirSync(sessionsDir(env), { recursive: true, mode: 0o700 });
+  const dir = sessionDir(id, env);
+  try {
+    fs.mkdirSync(dir, { mode: 0o700 });
+  } catch (err) {
+    if (err.code === 'EEXIST') throw new SessionExistsError(id);
+    throw err;
+  }
+  if (mark) fs.writeFileSync(path.join(dir, RESERVED_MARK), String(process.pid), { mode: 0o600 });
+  return dir;
+}
+
+// Removes a reserved dir that never got a record (a no-op once adopted).
+function dropReservedDir(id, env = process.env) {
+  const dir = sessionDir(id, env);
+  if (!validId(id) || !fs.existsSync(path.join(dir, RESERVED_MARK)) || fs.existsSync(path.join(dir, 'session.json'))) return;
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+}
+
+// Reserved dirs whose process is gone. Never throws.
+function reapReserved(env = process.env) {
+  let names = [];
+  try {
+    names = fs.readdirSync(sessionsDir(env));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    try {
+      const pid = Number(fs.readFileSync(path.join(sessionDir(name, env), RESERVED_MARK), 'utf8'));
+      if (!pidAlive(pid)) dropReservedDir(name, env);
+    } catch {
+      /* not reserved, or already gone */
+    }
+  }
 }
 
 function readSession(id, env = process.env) {
@@ -315,6 +359,9 @@ module.exports = {
   validId,
   newId,
   createSession,
+  reserveSessionDir,
+  dropReservedDir,
+  reapReserved,
   readSession,
   updateSession,
   deleteSession,

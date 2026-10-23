@@ -223,7 +223,16 @@ function inheritableMcpServers(live = LIVE_ZCODE) {
 // (<root>/mcp-health.json), so one dead server costs one session its
 // connect timeout, not every session. Keyed by name + a hash of the
 // server's definition: editing the server in the app retries it at once.
+// Each consecutive failure doubles the wait (6 h, 12 h, 1 d, 2 d, then 4 d):
+// a server that never connects costs a 30 s connect every few days, not
+// four times a day.
 const MCP_RETRY_AFTER_MS = 6 * 60 * 60 * 1000;
+const MCP_RETRY_MAX_DOUBLINGS = 4;
+
+function mcpRetryAfter(failures) {
+  const n = Math.min(Math.max(1, Number(failures) || 1), MCP_RETRY_MAX_DOUBLINGS + 1);
+  return MCP_RETRY_AFTER_MS * 2 ** (n - 1);
+}
 
 function mcpSignature(def) {
   return crypto.createHash('sha256').update(JSON.stringify(def)).digest('hex').slice(0, 16);
@@ -242,7 +251,7 @@ function readMcpHealth(root) {
 function unhealthyMcp(servers, health, now = Date.now()) {
   return Object.keys(servers).filter((name) => {
     const h = health[name];
-    return h && h.sig === mcpSignature(servers[name]) && now - h.failedAt < MCP_RETRY_AFTER_MS;
+    return h && h.sig === mcpSignature(servers[name]) && now - h.failedAt < mcpRetryAfter(h.failures);
   });
 }
 
@@ -258,9 +267,12 @@ function recordMcpHealth(root, statuses, inherited, now = Date.now()) {
       const state = statuses[name] && statuses[name].status;
       if (state === 'failed') {
         const error = statuses[name].error;
+        const sig = mcpSignature(def);
+        const prev = health[name] && health[name].sig === sig ? health[name] : null;
         health[name] = {
-          sig: mcpSignature(def),
+          sig,
           failedAt: now,
+          failures: ((prev && prev.failures) || (prev ? 1 : 0)) + 1,
           error: error ? String(typeof error === 'string' ? error : JSON.stringify(error)).slice(0, 200) : null,
         };
         changed = true;
@@ -361,6 +373,98 @@ const EXECUTOR_AGENTS_MD = path.join(__dirname, '..', 'assets', 'executor-agents
 // `zcode-agent acp`: a person watches and approves in the client.
 const ACP_AGENTS_MD = path.join(__dirname, '..', 'assets', 'acp-agents.md');
 
+// The desktop's user skills a session inherits: [{name, from}].
+function desktopSkills(live) {
+  const liveSkills = path.join(live, 'skills');
+  return listDir(liveSkills)
+    .filter((e) => !HOST_ONLY_SKILLS.has(e.name) && fs.existsSync(path.join(liveSkills, e.name, 'SKILL.md')))
+    .map((e) => ({ name: e.name, from: path.join(liveSkills, e.name) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Most desktop skills are symlinks into ~/.claude/skills or ~/.agents; the
+// snapshot follows them and copies the targets (a session HOME must not
+// point back into live directories, only into our own root). Keyed by every
+// file's path, size and mtime (~20 ms for ~1,400 files), so editing a skill
+// in place yields a new snapshot.
+const SNAPSHOT_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
+const SKILL_WALK_DEPTH = 16;
+
+function skillsSignature(entries) {
+  const hash = crypto.createHash('sha256');
+  const walk = (dir, rel, depth) => {
+    if (depth > SKILL_WALK_DEPTH) return;
+    for (const name of listDir(dir).map((e) => e.name).sort()) {
+      let st;
+      try {
+        st = fs.statSync(path.join(dir, name));
+      } catch {
+        continue; // dangling link
+      }
+      if (st.isDirectory()) walk(path.join(dir, name), `${rel}/${name}`, depth + 1);
+      else hash.update(`${rel}/${name}\0${st.size}\0${st.mtimeMs}\n`);
+    }
+  };
+  for (const { name, from } of entries) {
+    let real = from;
+    try {
+      real = fs.realpathSync(from);
+    } catch {
+      /* hashed by name */
+    }
+    hash.update(`skill\0${name}\0${real}\n`);
+    walk(from, name, 0);
+  }
+  return hash.digest('hex').slice(0, 16);
+}
+
+// <root>/shared/skills/<signature>, built once (into a temp dir, then
+// renamed, so a concurrent builder never sees a half copy). Snapshots
+// unused for two weeks are removed. Returns the dir, or null on failure.
+function skillsSnapshot(entries, root) {
+  try {
+    const base = path.join(root, 'shared', 'skills');
+    const dir = path.join(base, skillsSignature(entries));
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+      const tmp = path.join(base, `.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`);
+      try {
+        for (const { name, from } of entries) {
+          fs.cpSync(from, path.join(tmp, name), { recursive: true, dereference: true });
+        }
+        fs.mkdirSync(tmp, { recursive: true });
+        fs.renameSync(tmp, dir);
+      } catch (err) {
+        fs.rmSync(tmp, { recursive: true, force: true });
+        if (!fs.existsSync(dir)) throw err; // else a concurrent builder won
+      }
+    }
+    const now = new Date();
+    fs.utimesSync(dir, now, now);
+    for (const e of listDir(base)) {
+      const other = path.join(base, e.name);
+      if (other === dir) continue;
+      try {
+        if (now - fs.statSync(other).mtimeMs > SNAPSHOT_KEEP_MS) fs.rmSync(other, { recursive: true, force: true });
+      } catch {
+        /* pruning is housekeeping */
+      }
+    }
+    return dir;
+  } catch {
+    return null;
+  }
+}
+
+function linkDir(target, link) {
+  try {
+    fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Rewrites the frontmatter `model:` of an agent profile when it names
 // GLM-5.3 / GLM-5.3-Flash (any prefix: "account:x/GLM-5.3",
 // "custom:account%3Ax:GLM-5.3") so its model part is `model`.
@@ -381,6 +485,9 @@ function buildEngineHome({
   live = LIVE_ZCODE,
   mcpSpecs = [],
   hermetic = false,
+  // The desktop's MCP servers; default: unless hermetic. `zcode-agent acp`
+  // passes false (the client brings its own servers), keeping skills.
+  inheritMcp = !hermetic,
   browser = true,
   skillsDirs = [],
   noSkills = false,
@@ -417,13 +524,13 @@ function buildEngineHome({
     zai.options.apiKey = key;
   }
   const health = readMcpHealth(root);
-  const servers = effectiveMcpServers({ inherit: !hermetic, browser, mcpSpecs, live, health });
+  const servers = effectiveMcpServers({ inherit: inheritMcp, browser, mcpSpecs, live, health });
   const added = mcpSpecs.flatMap((spec) => Object.keys(spec));
-  const inheritedNames = hermetic ? [] : Object.keys(inheritableMcpServers(live));
+  const inheritedNames = inheritMcp ? Object.keys(inheritableMcpServers(live)) : [];
   const inherited = Object.fromEntries(
     Object.entries(servers).filter(([name]) => inheritedNames.includes(name) && !added.includes(name))
   );
-  const skippedUnhealthy = hermetic ? [] : unhealthyMcp(inheritableMcpServers(live), health).filter((n) => !servers[n]);
+  const skippedUnhealthy = !inheritMcp ? [] : unhealthyMcp(inheritableMcpServers(live), health).filter((n) => !servers[n]);
   cfg.mcp = { ...(cfg.mcp || {}), servers };
   // The desktop's plugins (browser-use, computer-use, …) inject skills and
   // tools meant for the app's own UI; the executor gets none unless
@@ -467,15 +574,15 @@ function buildEngineHome({
   fs.mkdirSync(skillsDir, { recursive: true });
   let skillsCopied = 0;
   if (!noSkills && !hermetic) {
-    // Most desktop skills are symlinks into ~/.claude/skills or ~/.agents:
-    // follow them, and copy the target (the session HOME must not point
-    // back into live directories).
-    const liveSkills = path.join(live, 'skills');
-    for (const entry of listDir(liveSkills)) {
-      if (HOST_ONLY_SKILLS.has(entry.name)) continue;
-      const from = path.join(liveSkills, entry.name);
-      if (!fs.existsSync(path.join(from, 'SKILL.md'))) continue;
-      fs.cpSync(from, path.join(skillsDir, entry.name), { recursive: true, dereference: true });
+    const entries = desktopSkills(live);
+    // One shared snapshot per distinct desktop skill set, linked into each
+    // HOME: copying ~100 skills per invocation cost 200-400 ms and ~14 MB
+    // per session. Without a root (or links), copy as before.
+    const snapshot = root ? skillsSnapshot(entries, root) : null;
+    for (const { name, from } of entries) {
+      if (!snapshot || !linkDir(path.join(snapshot, name), path.join(skillsDir, name))) {
+        fs.cpSync(from, path.join(skillsDir, name), { recursive: true, dereference: true });
+      }
       skillsCopied++;
     }
   }
@@ -587,6 +694,11 @@ function engineEnv({ home, builtinProviderConfig, parentEnv = process.env, sessi
   }
   childEnv.HOME = home;
   childEnv.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = builtinProviderConfig;
+  // V8 compile cache for the engine bundle, shared by every session
+  // (lib/engine-boot.js consumes and removes it). ZCODE_NO_COMPILE_CACHE=1
+  // starts the engine directly.
+  if (parentEnv.ZCODE_NO_COMPILE_CACHE === '1') delete childEnv.ZCODE_COMPILE_CACHE;
+  else childEnv.ZCODE_COMPILE_CACHE = path.join(rootDir(parentEnv), 'compile-cache');
   for (const name of [
     'ZCODE_STORAGE_DIR',
     'ZCODE_DATA_BASE_DIR',
@@ -618,7 +730,9 @@ module.exports = {
   readMcpHealth,
   recordMcpHealth,
   unhealthyMcp,
+  mcpRetryAfter,
   mcpSignature,
+  skillsSnapshot,
   discoverSkillDirs,
   LIVE_ZCODE,
   LIVE_V2,

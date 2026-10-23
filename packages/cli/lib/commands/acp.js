@@ -24,6 +24,7 @@ module.exports = function acpCommand(parsed) {
       effort: flags.effort,
       mode,
       mcpSpecs: flags.mcpSpecs,
+      mcpInherit: flags.mcpInherit,
       hermetic: flags.hermetic,
       browser: !flags.noBrowser,
       skillsDirs: flags.skillsDirs.map((d) => require('node:path').resolve(d)),

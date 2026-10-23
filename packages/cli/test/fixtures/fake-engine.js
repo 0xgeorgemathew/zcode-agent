@@ -6,7 +6,7 @@
 // FAKE_ENGINE_SCRIPT: {turns:[{response, write:{path,content}, writes:[{path,content}], delayMs,
 // fail, hang, userInput, tool, events:[{type,payload}], permission:{…params},
 // planApproval:{…params}, exitAfter}], subagents:[…], messages:[…],
-// messagesFail, createHangs}. `events` are sent
+// messagesFail, createHangs, mcpConnected}. `events` are sent
 // as session/event frames before the answer; `permission`/`planApproval`
 // send that server request and finish the turn only after the reply (the
 // reply is logged and its decision/action appended to the response). The
@@ -38,6 +38,18 @@ const writeState = (s) => fs.writeFileSync(stateFile, JSON.stringify(s));
 let serverReq = 1;
 log({ enginePid: process.pid });
 let hangingTurn = null;
+
+// script.mcpConnected: every server in the HOME's config reports connected
+// (otherwise none report, and callers wait out their settle timeout).
+function mcpStatuses() {
+  if (!script.mcpConnected) return {};
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(process.env.HOME, '.zcode', 'cli', 'config.json'), 'utf8'));
+    return Object.fromEntries(Object.keys(cfg.mcp.servers || {}).map((n) => [n, { status: 'connected', toolCount: 1 }]));
+  } catch {
+    return {};
+  }
+}
 
 const event = (sessionId, type, payload, extra = {}) =>
   send({ method: 'session/event', params: { sessionId, type, payload, ...extra } });
@@ -157,7 +169,7 @@ rl.on('line', (line) => {
       return;
     case 'session/subscribe':
     case 'mcp/list':
-      reply(msg.method === 'mcp/list' ? { statuses: {} } : {});
+      reply(msg.method === 'mcp/list' ? { statuses: mcpStatuses() } : {});
       return;
     case 'session/send':
       reply({});

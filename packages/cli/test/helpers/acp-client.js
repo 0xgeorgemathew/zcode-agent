@@ -17,9 +17,9 @@ function killAgents() {
   live.clear();
 }
 
-// Hermetic and browserless: no desktop MCP servers to connect.
-function startAgent(args = [], { env = {}, onPermission = () => ({ outcome: { outcome: 'selected', optionId: 'allow_once' } }) } = {}) {
-  const child = spawn(process.execPath, [BIN, 'acp', '--hermetic', '--no-browser', ...args], {
+// Hermetic and browserless by default (`base`): no desktop MCP servers to connect.
+function startAgent(args = [], { env = {}, base = ['--hermetic', '--no-browser'], onPermission = () => ({ outcome: { outcome: 'selected', optionId: 'allow_once' } }) } = {}) {
+  const child = spawn(process.execPath, [BIN, 'acp', ...base, ...args], {
     env: { ...process.env, ...env },
     stdio: ['pipe', 'pipe', 'pipe'],
   });

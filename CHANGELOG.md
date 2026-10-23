@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
+
+Faster starts, for ACP sessions and CLI runs alike, and a leaner ACP context: sessions no longer carry the ZCode app's MCP servers by default.
+
+### Faster
+
+- **ACP: the first prompt doesn't wait for the engine.** A new session's engine starts 1.5 s after `session/new` (`ZCODE_ACP_PREWARM_MS`, or `off`). Measured against the real engine: the prompt reached the model 0.3-1.4 s after it was sent, down from 4-9 s. The session record is still written only at the first prompt. A session closed before it, or a client gone, removes the engine and its dir; dirs left by a killed agent are cleaned up by the next one. Probes that exit within the delay start nothing.
+- **ACP: leaner context.** Sessions get the client's MCP servers and Playwright, not the ZCode app's other servers, whose tool lists rode along on every model request. Measured: the first request went from about 33.5k to 21.8k input tokens. `--mcp-inherit` or `ZCODE_ACP_INHERIT_MCP=1` restores them.
+- **Shared skills.** The app's skills are copied once into `~/.zcode-agent/shared/skills/<hash>` and linked into each session, instead of copied per session on every run: setup went from 300-550 ms to about 50 ms, and a session dir from ~15 MB to ~1 MB. Editing a skill makes a new snapshot; snapshots unused for two weeks are deleted.
+- **Engine compile cache.** The engine starts through `lib/engine-boot.js` with Node's compile cache in `~/.zcode-agent/compile-cache`: about 150 ms less per engine start (median ~640 ms vs ~790 ms). Not passed on to the commands the engine runs. `ZCODE_NO_COMPILE_CACHE=1` turns it off.
+- **Visual verifier.** Its engine now starts while the acceptance checks run, so a verifier round no longer waits ~2.5 s for an engine and its MCP servers. It is killed when the checks fail.
+- **MCP servers that keep failing** are skipped twice as long after each failure (6 h, 12 h, 1 d, 2 d, then 4 d), so a dead server costs a 30 s connect every few days instead of four times a day.
+
+### Changed
 
 - **Drawings.** The hero gives GLM-5.3 (builds and checks, green) and GLM-5.3-Flash (the verifier, blue) their own colours, and mentions `zcode-agent acp`; the ACP drawing marks Flash the same way. The README image URLs are pinned to a commit SHA, because raw.githubusercontent.com ignores a `?v=` query and kept serving the old file for up to five minutes.
 

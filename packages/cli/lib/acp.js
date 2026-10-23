@@ -8,9 +8,14 @@
 //
 // Every ACP session is a zcode-agent session (kind "acp") in the store,
 // with its own engine HOME, port and tmp dir, so `zcode-agent status`,
-// `watch` and `cost` see it. The record and the engine are created on the
-// first prompt (or session/load), never by session/new: clients probe with
+// `watch` and `cost` see it. The record is created on the first prompt (or
+// exists for session/load), never by session/new: clients probe with
 // session/new and kill the process, which must leave nothing behind.
+// The engine, though, starts PREWARM_MS after session/new (engine start +
+// MCP connect is ~3 s the first prompt would otherwise wait for) in a
+// reserved session dir with no record; a session closed before its first
+// prompt removes that dir, and a later agent reaps the dirs of agents that
+// were killed. Probes that kill the agent within PREWARM_MS start nothing.
 //
 // stdout carries protocol frames only. Diagnostics go to stderr, and every
 // frame to $ZCODE_ACP_LOG when set.
@@ -43,6 +48,17 @@ const MAX_TIMER_MS = 2147483647;
 // again; `running` only while a turn runs.
 const IDLE = { state: 'finished', status: 'completed', phase: 'idle' };
 const LIST_LIMIT = 256;
+const PREWARM_MS = 1500;
+
+// ZCODE_ACP_PREWARM_MS: delay before a new session's engine starts (ms), or
+// "off" to start it at the first prompt. null = off.
+function prewarmDelay(env) {
+  const v = env.ZCODE_ACP_PREWARM_MS;
+  if (v === undefined || v === '') return PREWARM_MS;
+  if (v === 'off') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : PREWARM_MS;
+}
 
 class AcpError extends Error {
   constructor(code, message, data) {
@@ -150,7 +166,7 @@ class Peer {
 // --- the agent ----------------------------------------------------------------------
 
 class Agent {
-  // defaults: {model, effort, mode, mcpSpecs, hermetic, browser, skillsDirs,
+  // defaults: {model, effort, mode, mcpSpecs, mcpInherit, hermetic, browser, skillsDirs,
   //   noSkills, inheritDesktop, timeoutMs}
   constructor({ peer, defaults, env = process.env, version = '0.0.0' }) {
     this.peer = peer;
@@ -264,7 +280,7 @@ class Agent {
     const cwd = this.realCwd(params.cwd);
     this.runtime(); // no key → auth_required now, not at the first prompt
     let id = store.newId();
-    while (store.readSession(id, this.env) || this.sessions.has(id)) id = store.newId();
+    while (fs.existsSync(store.sessionDir(id, this.env)) || this.sessions.has(id)) id = store.newId();
     const s = this.makeSession({
       id,
       cwd,
@@ -274,7 +290,27 @@ class Agent {
       mode: this.defaults.mode,
       persisted: false,
     });
+    this.schedulePrewarm(s);
     return { sessionId: id, modes: map.modeState(s.mode), configOptions: this.options(s) };
+  }
+
+  schedulePrewarm(s) {
+    const delay = prewarmDelay(this.env);
+    if (delay === null) return;
+    s.prewarm = setTimeout(() => {
+      s.prewarm = null;
+      if (s.closed || s.busy) return;
+      this.ensureEngine(s).catch((err) => {
+        // The first prompt starts it again and reports what fails.
+        process.stderr.write(`zcode-agent: engine prewarm for ${s.id} failed: ${this.scrub(err && err.message ? err.message : err).slice(0, 300)}\n`);
+      });
+    }, delay);
+    s.prewarm.unref();
+  }
+
+  cancelPrewarm(s) {
+    if (s.prewarm) clearTimeout(s.prewarm);
+    s.prewarm = null;
   }
 
   makeSession(fields) {
@@ -290,6 +326,9 @@ class Agent {
       releaseOwner: null,
       releasePort: null,
       sessionEnv: null,
+      reserved: false, // the session dir is claimed but holds no record yet
+      prewarm: null,
+      startFacts: {}, // port/out/tmp/engine ids, written with the record
       contextUsed: null,
       available: null,
       images: 0,
@@ -411,38 +450,25 @@ class Agent {
     return s.starting;
   }
 
-  // Creates the store record on first use, then starts (or restarts) the
-  // session's engine and opens its engine session (create, or resume the
-  // persisted one). Retried once on a transient start failure: nothing has
-  // reached the model yet.
+  // Starts (or restarts) the session's engine and opens its engine session
+  // (create, or resume the persisted one). A session without a record yet
+  // runs in a reserved dir; commit() writes the record at the first prompt.
+  // Retried once on a transient start failure: nothing has reached the
+  // model yet.
   async startEngine(s) {
     this.dropEngine(s); // a dead engine from an earlier turn
     const runtime = this.runtime();
     const env = this.env;
-    if (!s.persisted) {
-      store.createSession(s.id, {
-        kind: 'acp',
-        label: s.title || null,
-        cwd: s.cwd,
-        workspaceRoot: workspaceRoot(s.cwd),
-        owns: [],
-        ownsRoot: [],
-        touch: [],
-        preflight: false,
-        checks: [],
-        model: s.model,
-        effort: s.effort,
-        engineSessionId: null,
-        acp: { mode: s.mode },
-      }, env);
-      s.persisted = true;
+    if (!s.persisted && !s.reserved) {
+      store.reserveSessionDir(s.id, env, { mark: true });
+      s.reserved = true;
     }
     if (!s.releaseOwner) {
       s.releaseOwner = store.claimSession(s.id, env);
       if (!s.releaseOwner) throw new AcpError(ERR.internal, `session "${s.id}" is open in another zcode-agent process`);
     }
     const dir = store.sessionDir(s.id, env);
-    const record = store.readSession(s.id, env);
+    const record = (s.persisted && store.readSession(s.id, env)) || {};
     if (!s.sessionEnv) {
       const reserved = await reservePort({ env, preferred: record.port });
       if (!reserved) throw new AcpError(ERR.internal, 'no free port for ZCODE_PORT in 41000-48999');
@@ -451,16 +477,23 @@ class Agent {
       const out = path.join(tmp, 'out');
       fs.mkdirSync(out, { recursive: true, mode: 0o700 });
       s.sessionEnv = { ZCODE_SESSION_ID: s.id, ZCODE_PORT: String(reserved.port), ZCODE_OUT: out, ZCODE_TMP: tmp };
-      store.updateSession(s.id, { port: reserved.port, out, tmp }, env);
+      this.recordFacts(s, { port: reserved.port, out, tmp });
     }
     const home = path.join(dir, 'home');
+    const hermetic = !!this.defaults.hermetic || env.ZCODE_HERMETIC === '1';
     const built = buildEngineHome({
       home,
       root: rootDir(env),
       key: runtime.key,
       live: liveDir(env),
       mcpSpecs: [...(this.defaults.mcpSpecs || []), map.mcpSpec(s.mcpServers)],
-      hermetic: !!this.defaults.hermetic || env.ZCODE_HERMETIC === '1',
+      hermetic,
+      // The client passes its own MCP servers, and each desktop server's
+      // tool schemas ride along on every model request (measured: the
+      // desktop's five cost ~16k input tokens per request). Playwright and
+      // the client's servers stay; --mcp-inherit / ZCODE_ACP_INHERIT_MCP=1
+      // add the rest back.
+      inheritMcp: !hermetic && (!!this.defaults.mcpInherit || env.ZCODE_ACP_INHERIT_MCP === '1'),
       browser: this.defaults.browser !== false,
       skillsDirs: this.defaults.skillsDirs || [],
       noSkills: !!this.defaults.noSkills,
@@ -479,7 +512,7 @@ class Agent {
           workspacePath: s.cwd,
           modelId: s.model,
           effort: s.effort,
-          resumeSessionId: record.engineSessionId || null,
+          resumeSessionId: record.engineSessionId || s.startFacts.engineSessionId || null,
           requiredMcp: built.mcp.added,
           mode: s.mode,
           onMcpStatuses: (statuses) => recordMcpHealth(rootDir(env), statuses, built.mcp.inherited),
@@ -495,14 +528,43 @@ class Agent {
         if (attempt >= 2 || !transient || s.closed) throw new AcpError(ERR.internal, `engine failed to start: ${runtime.scrub(err.message).slice(0, 600)}`);
       }
     }
-    store.updateSession(s.id, {
+    this.recordFacts(s, {
       engineSessionId: s.engine.sessionId,
       enginePid: s.client.child.pid,
       pid: process.pid,
       ...IDLE,
       outcome: null,
       closedReason: null,
-    }, env);
+    });
+  }
+
+  // Facts about the running engine: into the record, or kept for commit().
+  recordFacts(s, facts) {
+    Object.assign(s.startFacts, facts);
+    if (s.persisted) store.updateSession(s.id, facts, this.env);
+  }
+
+  // Writes the record of a session that has none yet (its first prompt).
+  commit(s) {
+    if (s.persisted) return;
+    store.createSession(s.id, {
+      kind: 'acp',
+      label: s.title || null,
+      cwd: s.cwd,
+      workspaceRoot: workspaceRoot(s.cwd),
+      owns: [],
+      ownsRoot: [],
+      touch: [],
+      preflight: false,
+      checks: [],
+      model: s.model,
+      effort: s.effort,
+      engineSessionId: null,
+      acp: { mode: s.mode },
+      ...s.startFacts,
+    }, this.env, { adopt: s.reserved });
+    s.persisted = true;
+    s.reserved = false;
   }
 
   // The engine's interactive requests, answered by the person in the client.
@@ -560,7 +622,9 @@ class Agent {
     let phaseAt = 0;
     const activity = s.activity;
     try {
+      this.cancelPrewarm(s);
       if (!(await this.untilCancelled(s, this.ensureEngine(s)))) return { stopReason: 'cancelled' };
+      this.commit(s);
       const text = map.promptText(params.prompt, { saveImage: (block, i) => this.saveImage(s, block, i), model: s.model, env });
       if (!text.trim()) return { stopReason: 'end_turn' };
       const record = store.readSession(s.id, env) || {};
@@ -712,12 +776,22 @@ class Agent {
 
   release(s, reason) {
     s.closed = true;
+    this.cancelPrewarm(s);
     this.dropEngine(s);
     if (s.persisted) this.persist(s, { state: 'finished', phase: 'done', status: 'completed', closedReason: reason });
     if (s.releasePort) s.releasePort();
     if (s.releaseOwner) s.releaseOwner();
     s.releasePort = null;
     s.releaseOwner = null;
+    if (s.reserved) {
+      // Never prompted: the prewarmed engine's dir goes with it.
+      try {
+        store.dropReservedDir(s.id, this.env);
+      } catch {
+        /* reaped by the next agent */
+      }
+      s.reserved = false;
+    }
     if (this.sessions.get(s.id) === s) this.sessions.delete(s.id);
   }
 
@@ -744,6 +818,8 @@ function serve({ defaults, env = process.env, version, input = process.stdin, ou
     : null;
   const peer = new Peer({ input, output, log });
   const agent = new Agent({ peer, defaults, env, version });
+  // Dirs of prewarmed sessions whose agent was killed before a prompt.
+  setImmediate(() => store.reapReserved(env));
   let done = false;
   const stop = (reason, code) => {
     if (done) return;

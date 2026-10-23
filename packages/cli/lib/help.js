@@ -130,8 +130,12 @@ client run GLM-5.3 through it. Each ACP session is a zcode-agent session
   --effort <lvl>   low | high | max (default high)
   --timeout-ms <n> per prompt (default: none)
   --mcp <json|@f>  add MCP servers (repeatable)   --hermetic   --no-browser
+  --mcp-inherit    also the desktop's MCP servers (default: the client's
+                   servers and Playwright only; or $ZCODE_ACP_INHERIT_MCP=1)
   --skills <dir>   add skills (repeatable)        --no-skills
   --inherit-desktop  also the desktop's AGENTS.md, plugins and agent profiles
+A new session's engine starts 1.5 s after session/new, so the first prompt
+does not wait for it ($ZCODE_ACP_PREWARM_MS: delay in ms, or "off").
 T3 Code: an ACP Registry provider, source "Local command", executable
 zcode-agent-acp (see the README). $ZCODE_ACP_LOG=<file> logs every frame.`,
 };

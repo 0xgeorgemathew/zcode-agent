@@ -91,6 +91,9 @@ acp (zcode-agent acp):
                         edits and commands) | edit (accept edits) | plan | yolo
                         (full access). default: build; clients switch it per session
   --timeout-ms <n>      per prompt (default: none)
+  --mcp-inherit         also give sessions the ZCode app's MCP servers (default:
+                        only the client's servers and Playwright; each server's
+                        tools are sent with every model request)
                         also: --model, --effort, --mcp, --hermetic, --no-browser,
                         --skills, --no-skills, --inherit-desktop
 
@@ -207,7 +210,7 @@ function parseArgv(argv) {
       maxRepairs: undefined,
       checkTimeoutMs: undefined,
       mcpSpecs: [],
-      mcpInherit: false, // accepted for pre-1.0 callers: inheriting is the default now
+      mcpInherit: false, // acp: add the desktop's MCP servers; elsewhere accepted for pre-1.0 callers (inheriting is the default there)
       hermetic: false,
       noBrowser: false,
       mcpList: false,

@@ -19,6 +19,9 @@ const { spawn } = require('node:child_process');
 const readline = require('node:readline');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const path = require('node:path');
+
+const ENGINE_BOOT = path.join(__dirname, 'engine-boot.js');
 
 const RUNTIME_PREFERENCES = {
   nativeSearchEnhancementsEnabled: false,
@@ -56,7 +59,10 @@ class AppServerClient {
     // Own process group, so kill() takes the engine's tool subprocesses and
     // stdio MCP servers with it (a runaway shell command must not keep
     // writing to the workspace after cancel/timeout).
-    this.child = spawn(this.nodeBin, [this.enginePath, 'app-server', '--stdio'], {
+    // With ZCODE_COMPILE_CACHE set (engineEnv), lib/engine-boot.js starts
+    // the engine with V8's compile cache on.
+    const boot = this.env && this.env.ZCODE_COMPILE_CACHE ? [ENGINE_BOOT] : [];
+    this.child = spawn(this.nodeBin, [...boot, this.enginePath, 'app-server', '--stdio'], {
       env: this.env,
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],

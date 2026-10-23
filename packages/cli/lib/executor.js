@@ -425,6 +425,13 @@ async function execute(inv, opts = {}) {
   let verifierModel = null;
   let verifyRounds = 0;
   let visualEntries = null; // the verifier's verdicts: authoritative `visual`
+  // A verifier engine started while the acceptance checks run (engine start
+  // + MCP connect took ~2.5 s per verifier round); killed if unused.
+  let spareVerifier = null;
+  const dropSpareVerifier = () => {
+    if (spareVerifier) spareVerifier.client.kill();
+    spareVerifier = null;
+  };
   const invocationStart = new Date(started).toISOString();
 
   try {
@@ -531,9 +538,29 @@ async function execute(inv, opts = {}) {
       prompt = inv.resume ? buildResumePrompt(inv.resume.message, { kind: 'run' }) : inv.prompt;
     }
 
-    // One verifier round: a NEW engine session (own client: fresh context,
-    // separate from the implementer's) on the first image-capable model.
-    // Returns an entry per criterion; failures become met:null, never false.
+    // The verifier's engine: a NEW engine session (own client: fresh context
+    // and its own browser, separate from the implementer's) on the first
+    // image-capable model. Resolves {client, session}; kills it on failure.
+    const openVerifier = (model, onEvent) => {
+      const vclient = makeClient(runtime, { home, cwd: record.cwd, sessionEnv });
+      vclient.start();
+      const opening = openSession(vclient, {
+        workspacePath: record.cwd,
+        modelId: model,
+        effort: 'high',
+        requiredMcp: built.mcp.added,
+        onEvent,
+        onMcpStatuses: rememberMcp,
+      }).then((vsession) => ({ client: vclient, session: vsession }), (err) => {
+        vclient.kill();
+        throw err;
+      });
+      opening.client = vclient;
+      opening.catch(() => {});
+      return opening;
+    };
+    // One verifier round. Returns an entry per criterion; failures become
+    // met:null, never false.
     const verifyVisual = async (round) => {
       verifierModel = visionModel({ env, builtinConfig: runtime.builtinConfig });
       verifyRounds = round;
@@ -563,16 +590,21 @@ async function execute(inv, opts = {}) {
           }
         };
         try {
-          vclient = makeClient(runtime, { home, cwd: record.cwd, sessionEnv });
-          vclient.start();
-          const vsession = await openSession(vclient, {
-            workspacePath: record.cwd,
-            modelId: verifierModel,
-            effort: 'high',
-            requiredMcp: built.mcp.added,
-            onEvent: vrelay,
-            onMcpStatuses: rememberMcp,
-          });
+          const spare = attempt === 1 ? spareVerifier : null;
+          spareVerifier = null;
+          let opening = spare;
+          if (!opening) opening = openVerifier(verifierModel, vrelay);
+          vclient = opening.client;
+          let vsession;
+          try {
+            ({ session: vsession } = await opening);
+          } catch (err) {
+            if (!spare) throw err;
+            // The early start failed; one fresh start before giving up.
+            opening = openVerifier(verifierModel, vrelay);
+            vclient = opening.client;
+            ({ session: vsession } = await opening);
+          }
           const vturn = await runTurn(vclient, vsession, {
             modelId: verifierModel,
             effort: 'high',
@@ -640,6 +672,9 @@ async function execute(inv, opts = {}) {
       if (parsed.handback && parsed.handback.status === 'blocked') break;
       if (!inv.checks.length && !visualDeclared.length) break;
 
+      if (visualDeclared.length && parsed.handback && inv.checks.length && !spareVerifier) {
+        spareVerifier = openVerifier(visionModel({ env, builtinConfig: runtime.builtinConfig }), relay);
+      }
       if (inv.checks.length) {
         setPhase('checking', { count: inv.checks.length });
         const preChecks = before ? snapshot(root) : null;
@@ -667,6 +702,7 @@ async function execute(inv, opts = {}) {
         visualEntries = await verifyVisual(verifyRounds + 1);
         visualUnmet = visualEntries.filter((v) => v.met === false);
       }
+      dropSpareVerifier(); // checks failed: no verifier this round
       if ((!failures.length && !visualUnmet.length) || repairs >= inv.maxRepairs) break;
       if ((signal && signal.aborted) || Date.now() >= deadline) break;
       repairs++;
@@ -688,6 +724,7 @@ async function execute(inv, opts = {}) {
     error = err;
     if (err && err.turn) failedTurns.push(err.turn);
   } finally {
+    dropSpareVerifier();
     if (client) client.kill();
     if (releasePort) releasePort();
     lease.release();
