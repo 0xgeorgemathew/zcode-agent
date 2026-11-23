@@ -86,3 +86,34 @@ test('buildRepairPrompt carries the bounded failure output', () => {
   assert.match(p, /TAIL/);
   assert.ok(p.length < 4000);
 });
+
+// --- 1.4 ------------------------------------------------------------------------------
+
+test('normalizeContract: an object where a string belongs is refused, never "[object Object]"', () => {
+  assert.throws(() => normalizeContract({ objective: 'x', checks: [{ command: 'npm test' }] }), /list entries must be strings/);
+  assert.throws(() => normalizeContract({ objective: 'x', decisions: [{ what: 'a' }] }), ContractError);
+  assert.deepEqual(normalizeContract({ objective: 'x', checks: 'npm test' }).checks, ['npm test']);
+  assert.throws(() => normalizeContract({ objective: 'x', limits: { timeoutMs: 0.5 } }), /at least 1/);
+  assert.throws(() => normalizeContract({ objective: 'x', limits: { checkTimeoutMs: 0 } }), /at least 1/);
+});
+
+test('parseHandback: a code fence inside the JSON does not end the block', () => {
+  const body = { status: 'done', summary: 'run it with ```sh\nnpm start``` and see', notes: '```' };
+  const { handback: h, error } = parseHandback(`Report.\n\n\`\`\`zcode-handback\n${JSON.stringify(body, null, 1)}\n\`\`\``);
+  assert.equal(error, null);
+  assert.equal(h.summary, body.summary);
+  // A closing fence glued to the JSON is still accepted.
+  assert.equal(parseHandback('```zcode-handback\n{"status":"done"}```').handback.status, 'done');
+});
+
+test('deriveStatus: a preflight is "no open questions" only when it says done', () => {
+  const h = (status) => parseHandback(`\`\`\`zcode-handback\n${JSON.stringify({ status, summary: 's' })}\n\`\`\``).handback;
+  assert.equal(deriveStatus({ kind: 'task', preflight: true, handback: h('done') }).status, 'completed');
+  assert.equal(deriveStatus({ kind: 'task', preflight: true, handback: h('partial') }).status, 'unverified');
+  assert.equal(deriveStatus({ kind: 'task', preflight: true, handback: h('nonsense') }).status, 'unverified');
+});
+
+test('buildRepairPrompt names a check killed by a signal', () => {
+  const p = buildRepairPrompt([{ command: 'npm test', exitCode: null, timedOut: false, output: 'killed by SIGSEGV' }], { attempt: 1, maxRepairs: 2 });
+  assert.match(p, /`npm test` \(killed by a signal\)/);
+});

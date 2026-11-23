@@ -74,8 +74,4 @@ function resolveKeyInfo(env = process.env) {
   throw new NoKeyError();
 }
 
-function resolveKey(env = process.env) {
-  return resolveKeyInfo(env).key;
-}
-
-module.exports = { resolveKey, resolveKeyInfo, readDesktopKey, credentialsPath, rootDir, NoKeyError };
+module.exports = { resolveKeyInfo, readDesktopKey, rootDir, NoKeyError };

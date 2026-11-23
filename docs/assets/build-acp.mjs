@@ -15,7 +15,7 @@ function svg(p) {
 
   // Title block.
   t(40, 46, 'ZCODE-AGENT ACP · A CHAT SESSION, FROM PROMPT TO REPLY', { face: 'monoBold', size: 11, fill: p.muted, spacing: 2.4 });
-  const head = [['Your editor chats.', p.agent], ['GLM-5.3 does the work, and asks first.', p.flash]];
+  const head = [['Your editor chats.', p.agent], ['GLM-5.4 does the work, and asks first.', p.flash]];
   const fullWidth = (size) => head.reduce((w, [s]) => w + measure(s, 'display', size), 0) + measure(' ', 'display', size) * (head.length - 1);
   let HEAD = 38;
   while (fullWidth(HEAD) > W - 80) HEAD -= 0.5;
@@ -24,7 +24,7 @@ function svg(p) {
     t(hx, 92, s, { face: 'display', size: HEAD, fill: c });
     hx += measure(s, 'display', HEAD) + measure(' ', 'display', HEAD);
   }
-  t(40, 120, 'T3 Code, Zed or any ACP client drives GLM-5.3 directly: you chat, approve its edits and commands, and watch it work.', { face: 'sans', size: 15, fill: p.muted });
+  t(40, 120, 'T3 Code, Zed or any ACP client drives GLM-5.4 directly: you chat, approve its edits and commands, and watch it work.', { face: 'sans', size: 15, fill: p.muted });
 
   // The client: a glimpse of the chat.
   const AY = 150;
@@ -82,7 +82,7 @@ function svg(p) {
     if (note) t(x + 4, y + 17, note, { face: 'mono', size: 10.5, fill: p.look });
   };
   row(AY + 46, 'MODE', [['Ask', true], ['Accept edits', false], ['Plan', false], ['Full access', false]]);
-  row(AY + 82, 'MODEL', [['GLM-5.3', true], ['GLM-5.3-Flash', false]], 'sees images');
+  row(AY + 82, 'MODEL', [['GLM-5.4', true], ['GLM-5.3', false], ['GLM-5.3-Flash', false]]);
   row(AY + 118, 'EFFORT', [['low', false], ['high', true], ['max', false]]);
 
   // One turn in Ask mode: the agent works and stops to ask before it acts.
@@ -126,7 +126,7 @@ function svg(p) {
   t(sx, SY + 4.5, then, { face: 'sans', size: 13, fill: p.ink });
   t(40, 524, 'Sessions also show in zcode-agent status, watch and cost.', { face: 'sans', size: 12.5, fill: p.muted });
 
-  return out.svg('zcode-agent acp: an ACP client such as T3 Code or Zed sends prompts to zcode-agent, which streams text, diffs and plans back, asks before edits and commands, and offers Mode, Model and Effort pickers with GLM-5.3 at high effort by default.');
+  return out.svg('zcode-agent acp: an ACP client such as T3 Code or Zed sends prompts to zcode-agent, which streams text, diffs and plans back, asks before edits and commands, and offers Mode, Model and Effort pickers with GLM-5.4 at high effort by default.');
 }
 
 for (const [name, palette] of Object.entries(PALETTES)) writeFileSync(join(here, `acp-${name}.svg`), svg(palette));

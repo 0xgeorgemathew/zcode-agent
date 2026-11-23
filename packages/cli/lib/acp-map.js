@@ -13,7 +13,7 @@
 //  - session/messages: [{info:{role, semantics:{kind, uiVisibility}},
 //    parts:[{type:text|reasoning|tool, …}]}]
 const path = require('node:path');
-const { supportedEfforts, supportsImage } = require('./models.js');
+const { supportedEfforts, supportsImage, CONTEXT_WINDOWS, OFFICIAL_IDS } = require('./models.js');
 
 // Engine permission modes offered as the ACP session mode. `auto` is
 // reserved-but-unimplemented in the engine and `guarded` behaves like yolo
@@ -26,13 +26,14 @@ const MODES = [
 ];
 const MODE_IDS = MODES.map((m) => m.id);
 
-const MODELS = [
-  { value: 'GLM-5.3', name: 'GLM-5.3', description: 'Default; larger model, text only' },
-  { value: 'GLM-5.3-Flash', name: 'GLM-5.3-Flash', description: 'Fast and cheap; sees images' },
-];
-
-// Context windows by model (engine session/create settings; fallback).
-const CONTEXT_WINDOWS = { 'GLM-5.3-Flash': 200000, 'GLM-5.3': 1000000 };
+// The model picker, in models.js order (a model without a line here still
+// appears, undescribed). No "default" label: --model decides that per agent.
+const MODEL_NOTES = {
+  'GLM-5.4': 'Strongest model, 1M context, sees images',
+  'GLM-5.3': 'Previous flagship, 1M context, text only',
+  'GLM-5.3-Flash': 'Fast and cheap, sees images',
+};
+const MODELS = OFFICIAL_IDS.map((id) => ({ value: id, name: id, ...(MODEL_NOTES[id] ? { description: MODEL_NOTES[id] } : {}) }));
 
 const MAX_TOOL_TEXT = 8000;
 
@@ -82,8 +83,8 @@ function effortFor(model, effort, opts = {}) {
 
 // ACP prompt content blocks → the engine's prompt text. Images are written
 // by `saveImage(block, index) → path` (the engine takes a string prompt;
-// GLM-5.3-Flash reads image files with its Read tool).
-function promptText(blocks, { saveImage = null, model = null, env } = {}) {
+// an image-capable model reads image files with its Read tool).
+function promptText(blocks, { saveImage = null, model = null, env, builtinConfig } = {}) {
   const parts = [];
   let images = 0;
   for (const block of Array.isArray(blocks) ? blocks : []) {
@@ -91,7 +92,8 @@ function promptText(blocks, { saveImage = null, model = null, env } = {}) {
     if (block.type === 'text' && typeof block.text === 'string') {
       parts.push(block.text);
     } else if (block.type === 'resource_link') {
-      parts.push(`Referenced: ${uriToPath(block.uri) || block.name || ''}`.trim());
+      // A non-file link keeps its URI: the name alone loses where it points.
+      parts.push(`Referenced: ${uriToPath(block.uri) || block.uri || block.name || ''}`.trim());
     } else if (block.type === 'resource' && block.resource) {
       const r = block.resource;
       const where = uriToPath(r.uri) || r.uri || 'attachment';
@@ -99,8 +101,8 @@ function promptText(blocks, { saveImage = null, model = null, env } = {}) {
       else parts.push(`Referenced: ${where}`);
     } else if (block.type === 'image' && typeof block.data === 'string' && saveImage) {
       const file = saveImage(block, images++);
-      const note = model && !supportsImage(model, { env })
-        ? ` (${model} cannot see images; switch to GLM-5.3-Flash to have it looked at)`
+      const note = model && !supportsImage(model, { env, builtinConfig })
+        ? ` (${model} cannot see images; switch to ${OFFICIAL_IDS.filter((id) => supportsImage(id, { env, builtinConfig })).join(' or ')} to have it looked at)`
         : ' (open it with the Read tool)';
       parts.push(`Attached image: ${file}${note}`);
     }
@@ -264,7 +266,7 @@ class TurnMapper {
   constructor({ engineSessionId, cwd }) {
     this.engineSessionId = engineSessionId;
     this.cwd = cwd;
-    this.tools = new Map(); // toolCallId → {name, announced, hidden, done}
+    this.tools = new Map(); // toolCallId → {name, announced, hidden, done, diff}
     this.contextUsed = null;
     this.title = null;
     this.mode = null;
@@ -334,6 +336,7 @@ class TurnMapper {
       return plan ? [plan] : [];
     }
     const info = toolInfo(toolName, input, this.cwd);
+    if (info.content) t.diff = info.content;
     const fields = compact({
       title: info.title,
       kind: info.kind,
@@ -364,7 +367,11 @@ class TurnMapper {
       t.done = true;
       const r = p.result || {};
       const failed = r.success === false;
-      out.push({ sessionUpdate: 'tool_call_update', toolCallId: id, status: failed ? 'failed' : 'completed', ...compact(toolOutput(t.name, typeof r.content === 'string' ? r.content : r.content === undefined ? '' : JSON.stringify(r.content))) });
+      const result = toolOutput(t.name, typeof r.content === 'string' ? r.content : r.content === undefined ? '' : JSON.stringify(r.content));
+      // An update's `content` replaces the call's content: an edit that
+      // applied keeps its diff in front of the result text.
+      const content = [...(!failed && t.diff ? t.diff : []), ...(result.content || [])];
+      out.push({ sessionUpdate: 'tool_call_update', toolCallId: id, status: failed ? 'failed' : 'completed', ...compact({ content: content.length ? content : undefined, rawOutput: result.rawOutput }) });
     } else if (p.kind === 'error') {
       t.done = true;
       const e = p.error || p.result || {};
@@ -525,19 +532,16 @@ function contextWindow(model, { available = null, created = null } = {}) {
 module.exports = {
   MODES,
   MODE_IDS,
-  MODELS,
   modeState,
   configOptions,
   effortFor,
   promptText,
   mcpSpec,
   toolInfo,
-  planUpdate,
   TurnMapper,
   historyUpdates,
   permissionRequest,
   planApprovalRequest,
   contextWindow,
-  uriToPath,
   cleanTitle,
 };

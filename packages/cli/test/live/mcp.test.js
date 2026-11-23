@@ -5,7 +5,7 @@
 // exists nowhere else, so a match is proof of a real round-trip.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, rmSync } = require('node:fs');
+const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { cli, checkEngine, loadEnvKey } = require('../helpers/env.js');
@@ -45,21 +45,29 @@ test('--mcp-list prints the effective server set including the added server', as
 });
 
 test('default MCP set inherits the desktop servers; --hermetic keeps only the browser (--no-browser: empty)', async () => {
-  const inherited = await cli(['--mcp-list'], { timeoutMs: 120000 });
+  // An app directory of our own: what the real one holds differs per machine
+  // (this one's only extra server may be OAuth-only, which is never inherited).
+  const live = mkdtempSync(path.join(tmpdir(), 'zcode-live-'));
+  mkdirSync(path.join(live, 'cli'), { recursive: true });
+  writeFileSync(path.join(live, 'cli', 'config.json'), JSON.stringify({
+    mcp: { servers: { desk: { type: 'stdio', command: 'desk-server' }, off: { type: 'stdio', command: 'x', enabled: false }, sso: { type: 'http', url: 'https://sso.example.test/mcp' } } },
+  }));
+  const env = { ZAI_CODE_LIVE_DIR: live, ZAI_CODE_HOME: path.join(live, 'root') };
+  const inherited = await cli(['--mcp-list'], { timeoutMs: 120000, env });
   assert.equal(inherited.code, 0, inherited.stderr.trim());
   const set = JSON.parse(inherited.stdout.trim().split('\n').pop());
-  assert.ok(Object.keys(set.servers).length > 1, 'desktop has enabled servers to inherit');
-  assert.ok(set.servers.playwright, 'the browser server is always there');
+  assert.deepEqual(Object.keys(set.servers).sort(), ['desk', 'playwright'], 'enabled local servers are inherited; disabled and OAuth-only ones are not');
 
-  const hermetic = await cli(['--hermetic', '--mcp-list'], { timeoutMs: 120000 });
+  const hermetic = await cli(['--hermetic', '--mcp-list'], { timeoutMs: 120000, env });
   assert.equal(hermetic.code, 0, hermetic.stderr.trim());
   const dflt = JSON.parse(hermetic.stdout.trim().split('\n').pop());
   assert.deepEqual(Object.keys(dflt.servers), ['playwright'], '--hermetic: only the browser server');
 
-  const bare = await cli(['--hermetic', '--no-browser', '--mcp-list'], { timeoutMs: 120000 });
+  const bare = await cli(['--hermetic', '--no-browser', '--mcp-list'], { timeoutMs: 120000, env });
   assert.equal(bare.code, 0, bare.stderr.trim());
   const empty = JSON.parse(bare.stdout.trim().split('\n').pop());
   assert.deepEqual(empty.servers, {}, '--hermetic --no-browser means no servers');
+  rmSync(live, { recursive: true, force: true });
 });
 
 // LIVE. One retry on content mismatch / turn failure / timeout, never on

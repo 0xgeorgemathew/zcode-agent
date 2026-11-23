@@ -51,7 +51,10 @@ function buildVerifierPrompt(contract, { session, round = 1 }) {
   ].join('\n');
 }
 
-const BLOCK_RE = /```zcode-visual[^\n]*\n([\s\S]*?)```/g;
+// Ends at a fence on its own line (a ``` quoted inside a "seen" string is
+// not the end); the loose form is tried only when nothing ends properly.
+const BLOCK_RE = /```zcode-visual[^\n]*\n([\s\S]*?)\n[ \t]*```/g;
+const BLOCK_LOOSE_RE = /```zcode-visual[^\n]*\n([\s\S]*?)```/g;
 
 function normMet(v) {
   if (v === true || v === false) return v;
@@ -66,7 +69,8 @@ function normMet(v) {
 // {entries: [{criterion, viewport?, met: true|false|null, seen, note, shot}],
 // error}. The LAST block wins; an unparsable or empty block is an error.
 function parseVisualBlock(text) {
-  const matches = [...String(text || '').matchAll(BLOCK_RE)];
+  let matches = [...String(text || '').matchAll(BLOCK_RE)];
+  if (!matches.length) matches = [...String(text || '').matchAll(BLOCK_LOOSE_RE)];
   if (!matches.length) return { entries: [], error: 'no zcode-visual block' };
   let raw;
   try {
@@ -97,4 +101,4 @@ function notVerified(criteria, why) {
   return criteria.map((criterion) => ({ criterion, met: null, seen: '', note: `not verified: ${why}` }));
 }
 
-module.exports = { buildVerifierPrompt, parseVisualBlock, notVerified, BUILTIN_CRITERION };
+module.exports = { buildVerifierPrompt, parseVisualBlock, notVerified };

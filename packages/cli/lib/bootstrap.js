@@ -68,4 +68,4 @@ function makeClient(runtime, { home, cwd, sessionEnv = {}, interactions = null }
   });
 }
 
-module.exports = { resolveRuntime, makeClient, makeScrub, ConfigError };
+module.exports = { resolveRuntime, makeClient, ConfigError };

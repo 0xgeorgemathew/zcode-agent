@@ -352,7 +352,6 @@ function claimSlot(max, env = process.env) {
 }
 
 module.exports = {
-  RECORD_SCHEMA,
   SessionExistsError,
   sessionsDir,
   sessionDir,

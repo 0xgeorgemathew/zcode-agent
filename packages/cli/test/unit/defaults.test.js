@@ -1,13 +1,13 @@
 'use strict';
-// Every command defaults to GLM-5.3 at effort high; --model / --effort override.
+// Every command defaults to GLM-5.4 at effort high; --model / --effort override.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { parseArgv } = require('../../bin/zcode-agent.js');
 
-test('default model is GLM-5.3 at effort high for run, task and agent', () => {
+test('default model is GLM-5.4 at effort high for run, task and agent', () => {
   for (const cmd of ['run', 'task', 'agent']) {
     const { flags } = parseArgv([cmd, 'x']);
-    assert.equal(flags.model, 'GLM-5.3', cmd);
+    assert.equal(flags.model, 'GLM-5.4', cmd);
     assert.equal(flags.effort, 'high', cmd);
   }
 });

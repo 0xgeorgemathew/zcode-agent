@@ -144,7 +144,7 @@ test('timeout: message tells how to resume; failed turn keeps its model-request 
   fake.setScript({ turns: [{ hang: true }, { hang: true }, { response: 'ok' }] });
   const r = await execute(invocation(fake, { id: 'to-1', timeoutMs: 600, label: 'plan:wcplan' }));
   assert.equal(r.error.kind, 'timeout');
-  assert.match(r.error.message, /^timed out after \d+ min; "zcode-agent plan resume wcplan "continue"" picks up from the current files$/);
+  assert.match(r.error.message, /^timed out after 1 s; "zcode-agent plan resume wcplan "continue"" picks up from the current files$/);
   assert.equal(r.usage.modelRequests, 1);
   assert.equal(r.usage.incomplete, true);
   assert.deepEqual(r.usageTotal, { inputTokens: 0, outputTokens: 0, modelRequests: 1 });

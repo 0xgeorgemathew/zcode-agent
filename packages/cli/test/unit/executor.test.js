@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { setupFake, handback, invocation, TEST_KEY } = require('../helpers/fake.js');
-const { execute, exitCodeFor, ExecError } = require('../../lib/executor.js');
+const { execute, exitCodeFor, ExecError, readSettings } = require('../../lib/executor.js');
 const store = require('../../lib/store.js');
 const { acquireLease } = require('../../lib/workspace.js');
 
@@ -253,7 +253,7 @@ test('duplicate --id is never re-run', async () => {
 // --- regressions from the 0.4 review ------------------------------------------
 
 test('a sibling session that finished during our run owns its changes (not our scope violation)', async () => {
-  store.createSession('sib', { kind: 'task', workspaceRoot: fake.work, ownsRoot: ['other/**'], state: 'running' });
+  store.createSession('sib', { kind: 'task', workspaceRoot: fake.work, ownsRoot: ['other/**'], state: 'running', engineSessionId: 'sess_sib' });
   fake.setScript({ turns: [{ write: { path: 'other/x.txt', content: 's' }, response: handback({ status: 'done', summary: 's' }) }] });
   const r = await execute(invocation(fake, { contract: { checks: ['true'], owns: ['src/**'] } }), {
     onEvent: (e) => {
@@ -324,4 +324,131 @@ test('cancel kills the engine\'s whole process tree (no late writes by tool subp
   assert.equal(r.status, 'cancelled');
   await new Promise((res) => setTimeout(res, 1500));
   assert.ok(!fs.existsSync(marker), 'tool subprocess died with the engine group');
+});
+
+// --- 1.4 ------------------------------------------------------------------------------
+
+test('a session that never ran (refused, or a read-only preflight) excuses nothing', async () => {
+  store.createSession('ghost', { kind: 'task', workspaceRoot: fake.work, ownsRoot: ['other/**'], state: 'finished', status: 'failed' });
+  store.createSession('pre', { kind: 'task', workspaceRoot: fake.work, ownsRoot: ['other/**'], state: 'running', preflight: true, engineSessionId: 'sess_pre' });
+  fake.setScript({ turns: [{ write: { path: 'other/x.txt', content: 's' }, response: handback({ status: 'done', summary: 's' }) }] });
+  const r = await execute(invocation(fake, { contract: { checks: ['true'], owns: ['src/**'] } }), {
+    onEvent: (e) => {
+      if (e.type === 'phase' && e.phase === 'executing') for (const id of ['ghost', 'pre']) store.updateSession(id, { state: 'finished' });
+    },
+  });
+  assert.deepEqual(r.scopeViolations, ['other/x.txt']);
+  assert.equal(r.status, 'partial');
+});
+
+test('--timeout-ms bounds engine start: exit 124 in about the timeout, not the engine\'s 30 s', async () => {
+  fake.setScript({ turns: [{ response: 'ok' }], createHangs: true });
+  const started = Date.now();
+  const r = await execute(invocation(fake, { kind: 'run', timeoutMs: 1200 }));
+  assert.ok(Date.now() - started < 10000, `took ${Date.now() - started} ms`);
+  assert.equal(r.error.kind, 'timeout');
+  assert.equal(exitCodeFor(r), 124);
+  assert.deepEqual(sends(), [], 'nothing was sent to the model');
+});
+
+test('cancel during engine start ends cancelled at once', async () => {
+  fake.setScript({ turns: [{ response: 'ok' }], createHangs: true });
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 300);
+  const started = Date.now();
+  const r = await execute(invocation(fake, { kind: 'run' }), { signal: controller.signal });
+  assert.ok(Date.now() - started < 5000);
+  assert.equal(r.status, 'cancelled');
+  assert.equal(exitCodeFor(r), 130);
+});
+
+test('resuming a run the engine never saw sends its original prompt, then the message', async () => {
+  fake.setScript({ turns: [{ response: 'ok' }], createHangs: true });
+  const inv = invocation(fake, { id: 'q1', kind: 'run', prompt: 'summarise the repo', timeoutMs: 1200 });
+  assert.equal((await execute(inv)).error.kind, 'timeout');
+  assert.equal(readSettings('q1').prompt, 'summarise the repo', 'the prompt is kept with the session');
+  fake.setScript({ turns: [{ response: 'done' }, { response: 'more' }] });
+  const again = { ...inv, ...readSettings('q1'), timeoutMs: 20000 };
+  const r = await execute({ ...again, resume: { message: 'continue' } });
+  assert.equal(r.status, 'completed');
+  assert.match(sends()[0], /^summarise the repo\n\n## Message from the orchestrator\ncontinue$/);
+  // Once the engine has the conversation, a resume sends only the message.
+  await execute({ ...again, resume: { message: 'and then?' } });
+  assert.equal(sends()[1], 'and then?');
+});
+
+test('a preflight resume that never starts stays a preflight; the next resume still gets the task', async () => {
+  fake.setScript({ turns: [
+    { response: handback({ status: 'blocked', summary: 'q', questions: ['which colour?'] }) },
+    { write: { path: 'src/a.txt', content: 'a' }, response: handback({ status: 'done', summary: 'built' }) },
+  ] });
+  const inv = invocation(fake, { id: 'pf1', preflight: true, contract: { checks: ['true'], owns: ['src/**'] } });
+  assert.equal((await execute(inv)).status, 'blocked');
+  const other = acquireLease({ id: 'other', root: fake.work, owns: ['src/**'] });
+  await assert.rejects(execute({ ...inv, preflight: true, resume: { message: 'blue' } }), (err) => err instanceof ExecError && err.exitCode === 7);
+  assert.equal(readSettings('pf1').preflight, true, 'still a preflight');
+  assert.equal(store.readSession('pf1').preflight, true);
+  other.release();
+  const r = await execute({ ...inv, preflight: true, resume: { message: 'blue' } });
+  assert.equal(r.status, 'completed');
+  assert.match(sends()[1], /## Objective[\s\S]*## Answers to your preflight questions[\s\S]*blue/);
+  assert.equal(readSettings('pf1').preflight, false);
+});
+
+test('resume of a session whose workspace is gone is refused (exit 2), not a stack trace', async () => {
+  fake.setScript({ turns: [{ response: 'ok' }] });
+  const gone = path.join(fake.base, 'gone');
+  fs.mkdirSync(gone);
+  const inv = invocation(fake, { id: 'gone1', kind: 'run', cwd: gone });
+  await execute(inv);
+  fs.rmSync(gone, { recursive: true });
+  await assert.rejects(execute({ ...inv, resume: { message: 'more' } }), (err) => err instanceof ExecError && err.exitCode === 2 && /no longer exists/.test(err.message));
+});
+
+test('a turn that ends with a non-success result still counts its tokens', async () => {
+  fake.setScript({ turns: [{ response: 'stopped', resultType: 'error_max_turns' }] });
+  const r = await execute(invocation(fake, { kind: 'run' }));
+  assert.equal(r.status, 'failed');
+  assert.deepEqual(r.usage, { inputTokens: 100, outputTokens: 10, modelRequests: 1 });
+  assert.equal(r.usageTotal.inputTokens, 100);
+});
+
+test('out of time before the repair turn is a timeout (124, resumable), not checks_failed', async () => {
+  // The turn leaves under a second; the first check runs on the 1 s floor
+  // and ends after the deadline, the second fails: a repair is owed, with no time left.
+  fake.setScript({ turns: [{ delayMs: 1600, response: handback({ status: 'done', summary: 's' }) }] });
+  const r = await execute(invocation(fake, { timeoutMs: 2500, contract: { checks: ['sleep 0.9', 'exit 1'] } }));
+  assert.equal(r.error.kind, 'timeout');
+  assert.equal(exitCodeFor(r), 124);
+});
+
+test('a second Ctrl-C exits at once and still takes the engine with it', async () => {
+  // The engine ignores session/stop, so the first signal is still waiting on
+  // it when the second arrives and the CLI exits without unwinding.
+  fake.setScript({ turns: [{ hang: true }], stopHangs: true });
+  const { spawn } = require('node:child_process');
+  const BIN = path.join(__dirname, '..', '..', 'bin', 'zcode-agent.js');
+  const child = spawn(process.execPath, [BIN, 'run', '--json', '--cwd', fake.work, 'x'], { stdio: 'ignore' });
+  const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
+  const wait = async (cond, ms) => {
+    for (const end = Date.now() + ms; !cond(); ) {
+      assert.ok(Date.now() < end, 'condition never became true');
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  };
+  await wait(() => fake.log().some((l) => l.turnStarted), 15000);
+  const enginePid = fake.log().find((l) => l.enginePid).enginePid;
+  child.kill('SIGINT');
+  await new Promise((r) => setTimeout(r, 150));
+  child.kill('SIGINT');
+  assert.equal(await exited, 130);
+  const alive = () => {
+    try {
+      process.kill(enginePid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  await wait(() => !alive(), 2000);
 });

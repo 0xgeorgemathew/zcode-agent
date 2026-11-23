@@ -20,7 +20,7 @@ test('an inherited server that failed is skipped for six hours, retried at once 
   const ok = { command: 'ok-server' };
   write({ dead, ok });
   const now = Date.now();
-  recordMcpHealth(root, { dead: { status: 'failed', error: 'timed out' }, ok: { status: 'connected' } }, { dead, ok }, now);
+  recordMcpHealth(root, { dead: { status: 'failed', error: 'timed out' }, ok: { status: 'connected' } }, { dead, ok }, { now });
   const health = readMcpHealth(root);
   assert.deepEqual(Object.keys(health), ['dead']);
   assert.equal(health.dead.error, 'timed out');
@@ -29,7 +29,7 @@ test('an inherited server that failed is skipped for six hours, retried at once 
   assert.deepEqual(names({ dead: { ...health.dead, failedAt: now - 7 * 3600 * 1000 } }), ['dead', 'ok'], 'retried after six hours');
   write({ dead: { ...dead, url: 'https://moved.example.com/sse' }, ok });
   assert.deepEqual(names(health), ['dead', 'ok'], 'an edited definition is retried at once');
-  recordMcpHealth(root, { dead: { status: 'connected' } }, { dead }, now);
+  recordMcpHealth(root, { dead: { status: 'connected' } }, { dead }, { now });
   assert.deepEqual(readMcpHealth(root), {}, 'a later success clears it');
 });
 
@@ -72,19 +72,40 @@ test('a pre-1.0 ~/.zcode-cli root moves to ~/.zcode-agent and leaves a symlink',
   }
 });
 
-test('the packaged engine wins over the app bundle; its provider config sits next to it', () => {
+// A fresh checkout has no workspace link until `npm install`.
+function enginePackage(t, id = '@zcode-agent/engine') {
+  try {
+    return require(id);
+  } catch (err) {
+    if (err.code !== 'MODULE_NOT_FOUND') throw err;
+    t.skip('workspace not linked: run npm install');
+    return null;
+  }
+}
+
+test('the packaged engine wins over the app bundle; its provider config sits next to it', (t) => {
   const engine = require('../../lib/engine.js');
-  const pkg = require('@zcode-agent/engine');
-  if (!fs.existsSync(pkg.enginePath)) return; // source checkout without `npm run build:engine`
+  const pkg = enginePackage(t);
+  if (!pkg) return;
+  if (!fs.existsSync(pkg.enginePath)) return t.skip('engine not built: npm run build:engine');
   const env = { PATH: '' };
   assert.equal(engine.resolveEngine(env), pkg.enginePath);
   assert.equal(engine.resolveBuiltinProviderConfig(pkg.enginePath, env), pkg.builtinProviderConfig);
-  assert.notEqual(engine.resolveEngine({ ...env, ZAI_CODE_NO_PACKAGED_ENGINE: '1' }), pkg.enginePath);
+  // Without the packaged engine: the ZCode app's, or (no app on this
+  // machine) no engine at all. Never the packaged one.
+  let other = null;
+  try {
+    other = engine.resolveEngine({ ...env, ZAI_CODE_NO_PACKAGED_ENGINE: '1' });
+  } catch (err) {
+    assert.equal(err.code, 'ZAI_NO_ENGINE');
+  }
+  assert.notEqual(other, pkg.enginePath);
 });
 
-test('the engine package pins the version the CLI depends on', () => {
+test('the engine package pins the version the CLI depends on', (t) => {
   const cli = require('../../package.json');
-  const enginePkg = require('@zcode-agent/engine/package.json');
+  const enginePkg = enginePackage(t, '@zcode-agent/engine/package.json');
+  if (!enginePkg) return;
   const pins = require('@zcode-agent/engine/engine.json');
   assert.equal(cli.dependencies['@zcode-agent/engine'], enginePkg.version, 'exact pin');
   assert.equal(enginePkg.version, pins.engineVersion);
@@ -107,7 +128,10 @@ test('standalone: the synthesized provider config carries modelConfigRules (the 
   const built = buildEngineHome({ home, live, key: 'k', browser: false });
   assert.equal(built.mode, 'synthesized');
   const pc = JSON.parse(fs.readFileSync(path.join(home, '.zcode', 'v2', 'provider_config.json'), 'utf8'));
-  assert.deepEqual(pc.config.modelConfigRules, { providerModelRules: [], manualProviderModelRules: [] });
+  assert.deepEqual(pc.config.modelConfigRules.manualProviderModelRules, []);
+  // GLM-5.4 is not in any engine's builtin config yet: registered on zai-api.
+  assert.deepEqual(pc.config.modelConfigRules.providerModelRules.map((r) => [r.providerId, r.modelId, r.config.enabled]), [['zai-api', 'GLM-5.4', true]]);
+  assert.deepEqual(pc.config.providerConfigRules.providerRules[0].config.personalModelIds, ['GLM-5.4']);
   assert.equal(pc.config.providerConfigRules.providerRules[0].config.access.apiKey, 'k');
 });
 
@@ -133,7 +157,7 @@ test('an app provider_config.json without a zai-api rule is synthesized, not a c
     const built = buildEngineHome({ home, live, key: 'k', browser: false });
     assert.equal(built.mode, 'synthesized', name);
     const pc = JSON.parse(fs.readFileSync(path.join(home, '.zcode', 'v2', 'provider_config.json'), 'utf8'));
-    assert.deepEqual(pc.config.modelConfigRules, { providerModelRules: [], manualProviderModelRules: [] }, name);
+    assert.deepEqual(pc.config.modelConfigRules.providerModelRules.map((r) => r.modelId), ['GLM-5.4'], name);
     assert.deepEqual(pc.config.providerConfigRules.providerRules.map((r) => [r.providerId, r.config.access.apiKey]), [['zai-api', 'k']], name);
     assert.equal(fs.readFileSync(path.join(live, 'v2', 'provider_config.json'), 'utf8'), text, `${name}: live file untouched`);
   }
@@ -144,15 +168,31 @@ test('an app provider_config.json without a zai-api rule is synthesized, not a c
   fs.writeFileSync(path.join(live, 'v2', 'provider_config.json'), JSON.stringify({
     config: {
       providerConfigRules: { providerRules: [{ providerId: 'other' }, { providerId: 'zai-api', config: { group: 'g', access: { apiKey: 'old' } } }] },
-      modelConfigRules: { providerModelRules: ['m'] },
+      modelConfigRules: {
+        providerModelRules: ['m', { providerId: 'zai-api', modelId: 'GLM-5.4', config: { enabled: false } }],
+        manualProviderModelRules: [{ providerId: 'zai-api', modelId: 'GLM-5.4', config: {} }, { providerId: 'zai-api', modelId: 'Mine' }],
+      },
     },
   }));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-eh-'));
   const built = buildEngineHome({ home, live, key: 'k', browser: false });
   assert.equal(built.mode, 'copied-v2-top-level');
   const pc = JSON.parse(fs.readFileSync(path.join(home, '.zcode', 'v2', 'provider_config.json'), 'utf8'));
-  assert.deepEqual(pc.config.providerConfigRules.providerRules, [{ providerId: 'zai-api', config: { group: 'g', access: { type: 'api-key', apiKey: 'k' } } }]);
-  assert.deepEqual(pc.config.modelConfigRules, { providerModelRules: ['m'] });
+  assert.deepEqual(pc.config.providerConfigRules.providerRules, [{ providerId: 'zai-api', config: { group: 'g', access: { type: 'api-key', apiKey: 'k' }, personalModelIds: ['GLM-5.4'] } }]);
+  // The app's own rules are kept; its rules for GLM-5.4 give way to the one registration (the engine refuses a model declared twice).
+  const mcr = pc.config.modelConfigRules;
+  assert.equal(mcr.providerModelRules[0], 'm');
+  assert.deepEqual(mcr.providerModelRules.slice(1).map((r) => [r.modelId, r.config.enabled]), [['GLM-5.4', true]]);
+  assert.deepEqual(mcr.manualProviderModelRules, [{ providerId: 'zai-api', modelId: 'Mine' }]);
+
+  // An engine that lists GLM-5.4 itself gets no registration.
+  const fresh = path.join(home, 'fresh-builtin.json');
+  fs.writeFileSync(fresh, JSON.stringify({ config: { providerConfigRules: { templateRules: [{ templateId: 'zai-api', config: { builtinModelIds: ['GLM-5.4'] } }] } } }));
+  const home2 = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-eh-'));
+  buildEngineHome({ home: home2, live: fs.mkdtempSync(path.join(os.tmpdir(), 'zc-nolive-')), key: 'k', browser: false, builtinConfig: fresh });
+  const pc2 = JSON.parse(fs.readFileSync(path.join(home2, '.zcode', 'v2', 'provider_config.json'), 'utf8'));
+  assert.deepEqual(pc2.config.modelConfigRules, { providerModelRules: [], manualProviderModelRules: [] });
+  assert.equal(pc2.config.providerConfigRules.providerRules[0].config.personalModelIds, undefined);
 });
 
 test('standalone: no app Playwright server means the pinned headless one', () => {

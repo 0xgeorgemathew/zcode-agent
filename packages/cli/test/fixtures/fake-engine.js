@@ -5,8 +5,8 @@
 // (DESIGN §9/§16). Behavior per session/send comes from the JSON file in
 // FAKE_ENGINE_SCRIPT: {turns:[{response, write:{path,content}, writes:[{path,content}], delayMs,
 // fail, hang, userInput, tool, events:[{type,payload}], permission:{…params},
-// planApproval:{…params}, exitAfter}], subagents:[…], messages:[…],
-// messagesFail, createHangs, mcpConnected}. `events` are sent
+// planApproval:{…params}, exitAfter, resultType, grandchild}], subagents:[…],
+// messages:[…], messagesFail, createHangs, createDelayMs, stopHangs, mcpConnected}. `events` are sent
 // as session/event frames before the answer; `permission`/`planApproval`
 // send that server request and finish the turn only after the reply (the
 // reply is logged and its decision/action appended to the response). The
@@ -37,7 +37,6 @@ const readState = () => {
 const writeState = (s) => fs.writeFileSync(stateFile, JSON.stringify(s));
 let serverReq = 1;
 log({ enginePid: process.pid });
-let hangingTurn = null;
 
 // script.mcpConnected: every server in the HOME's config reports connected
 // (otherwise none report, and callers wait out their settle timeout).
@@ -87,7 +86,9 @@ function runTurn(sessionId) {
     require('node:child_process').spawn('/bin/sh', ['-c', `sleep 1; touch '${spec.grandchild}'`], { stdio: 'ignore' });
   }
   if (spec.hang) {
-    hangingTurn = sessionId;
+    // Like a real engine mid-tool, it does not end when its stdin closes
+    // (for half a minute: a test that leaks one must not leak it for good).
+    setTimeout(() => {}, 30000);
     return;
   }
   const ask = spec.permission
@@ -127,7 +128,7 @@ function finishTurn(sessionId, spec, reply) {
     event(sessionId, 'model.streaming', { kind: 'text_delta', delta: answer, done: true });
     event(sessionId, 'turn.completed', {
       response: answer,
-      resultType: 'success',
+      resultType: spec.resultType || 'success',
       usage: { inputTokens: 100, outputTokens: 10 },
       toolCallCount: spec.tool ? 1 : 0,
     });
@@ -157,7 +158,8 @@ rl.on('line', (line) => {
       state.sessions++;
       writeState(state);
       if (script.createHangs) return;
-      reply({ session: { sessionId: `sess_fake${state.sessions}`, mode: 'build' } });
+      // createDelayMs: a slow engine start (the session opens late).
+      setTimeout(() => reply({ session: { sessionId: `sess_fake${state.sessions}`, mode: 'build' } }), script.createDelayMs || 0);
       return;
     }
     case 'session/resume':
@@ -176,8 +178,8 @@ rl.on('line', (line) => {
       runTurn(msg.params.sessionId);
       return;
     case 'session/stop':
+      if (script.stopHangs) return; // a wedged engine: never answers the stop
       reply({});
-      hangingTurn = null;
       return;
     case 'session/messages':
       if (script.messagesFail) send({ id: msg.id, error: { code: -32603, message: 'fake: messages failed' } });

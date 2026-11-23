@@ -42,4 +42,4 @@ async function reservePort({ env = process.env, preferred = null } = {}) {
   return null;
 }
 
-module.exports = { reservePort, portFree, PORT_MIN, PORT_MAX };
+module.exports = { reservePort, PORT_MIN, PORT_MAX };

@@ -21,6 +21,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { track } = require('./procs.js');
+
 const ENGINE_BOOT = path.join(__dirname, 'engine-boot.js');
 
 const RUNTIME_PREFERENCES = {
@@ -68,6 +70,10 @@ class AppServerClient {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
     });
+    // Killed at process exit if nothing killed it before (lib/procs.js).
+    const untrack = track(this.child.pid);
+    this.child.on('exit', untrack);
+    this.child.on('error', untrack);
     this.child.stderr.on('data', (d) => {
       this.engineStderr += d;
       if (this.engineStderr.length > 20000) {
@@ -182,7 +188,6 @@ class AppServerClient {
     // proven non-fatal with -32601 — gets method-not-found and the run
     // continues.
     replyError(-32601, `zcode-agent: no policy for server request ${method}`);
-    if (this.onServerRequest) this.onServerRequest(frame);
   }
 
   request(method, params, { timeoutMs = 30000 } = {}) {
@@ -259,16 +264,23 @@ function workspaceKeyFor(workspacePath) {
 // the last status map (the caller remembers inherited servers that failed).
 async function waitForMcp(client, { workspacePath, required, timeoutMs = 20000, onEvent = () => {}, onStatuses = () => {} }) {
   const ws = { workspace: { workspacePath, workspaceKey: workspaceKeyFor(workspacePath) } };
+  // An engine that died here must fail the open (the caller retries with a
+  // fresh one), not pass for a session that then polls a dead client.
+  const alive = () => {
+    if (client.dead) throw new Error('engine app-server exited during MCP connect');
+  };
   try {
     await client.request('mcp/list', { ...ws, mode: 'connect' }, { timeoutMs: 45000 });
   } catch {
     /* best-effort trigger; the status checks below still report */
   }
+  alive();
   const status = async () => {
     try {
       const res = await client.request('mcp/list', { ...ws, mode: 'status' }, { timeoutMs: 5000 });
       return (res && res.statuses) || {};
     } catch {
+      alive();
       return null; // transient — retry
     }
   };
@@ -295,7 +307,7 @@ async function waitForMcp(client, { workspacePath, required, timeoutMs = 20000, 
           status: state,
           toolCount: (entry && entry.toolCount) ?? null,
           failureKind: (entry && entry.failureKind) ?? null,
-          error: (entry && entry.error) ? String(typeof entry.error === 'string' ? entry.error : JSON.stringify(entry.error)).slice(0, 300) : null,
+          error: (entry && entry.error) ? client.scrub(String(typeof entry.error === 'string' ? entry.error : JSON.stringify(entry.error))).slice(0, 300) : null,
         });
       }
     }
@@ -375,7 +387,7 @@ async function openSession(client, {
 
 // Sends one prompt into an open session and waits for its terminal event.
 // Resolves the turn facts; rejects with TurnError (kind: timeout |
-// cancelled | user_input | terminal_failed | result_type | no_completion).
+// cancelled | user_input | terminal_failed | result_type | engine_exit).
 // On timeout or abort the engine is told to stop the active prompt
 // (session/stop) before we give up on it, so no tool keeps running behind
 // our back while the caller tears the engine down.
@@ -394,7 +406,6 @@ async function runTurn(client, session, {
     response: '',
     usage: null,
     engineModel: null,
-    engineProvider: null,
     engineReasoningLevel: null,
     terminalStatus: null,
     streamingEvents: 0,
@@ -403,7 +414,6 @@ async function runTurn(client, session, {
     toolCallCount: null,
     toolEvents: 0,
     modelRequests: 0,
-    userInput: null,
     durationMs: 0,
   };
 
@@ -421,7 +431,6 @@ async function runTurn(client, session, {
     const question = client.scrub(
       String(params.message || params.prompt || params.question || JSON.stringify(params)).slice(0, 800)
     );
-    turn.userInput = question;
     fail(new TurnError(`headless run requested user input: ${question}`, { kind: 'user_input' }));
   };
 
@@ -464,7 +473,6 @@ async function runTurn(client, session, {
         onEvent({ type: 'turn', phase: 'started', turnId: params.turnId });
       } else if (type === 'session.updated' && payload && payload.type === 'model_request_started') {
         turn.modelRequests++;
-        turn.engineProvider = payload.providerId ?? turn.engineProvider;
         turn.engineModel = payload.modelId ?? turn.engineModel;
         turn.engineReasoningLevel = payload.modelCall?.reasoning?.requestedLevel ?? turn.engineReasoningLevel;
         onEvent({
@@ -490,11 +498,11 @@ async function runTurn(client, session, {
   const prevOnExit = client.onExit;
   client.onExit = (err) => fail(new TurnError(client.scrub(err.message), { kind: 'engine_exit' }));
 
-  const remaining = Math.max(0, deadline - Date.now());
-  const timer = setTimeout(
-    () => fail(new TurnError('run exceeded --timeout-ms', { kind: 'timeout' })),
-    remaining
-  );
+  const timedOut = () => fail(new TurnError('run exceeded --timeout-ms', { kind: 'timeout' }));
+  const remaining = deadline - Date.now();
+  // No time left (engine start used it up): the prompt is never sent.
+  if (remaining <= 0) timedOut();
+  const timer = setTimeout(timedOut, Math.max(0, remaining));
   const onAbort = () => fail(new TurnError('cancelled', { kind: 'cancelled' }));
   if (signal) {
     if (signal.aborted) onAbort();
@@ -526,10 +534,14 @@ async function runTurn(client, session, {
       failed.turn = turn;
       throw failed;
     }
-    if (completed.resultType && completed.resultType !== 'success') {
-      throw new TurnError(`turn completed with resultType "${completed.resultType}"`, { kind: 'result_type' });
-    }
     turn.durationMs = Date.now() - started;
+    if (completed.resultType && completed.resultType !== 'success') {
+      const err = new TurnError(`turn completed with resultType "${completed.resultType}"`, { kind: 'result_type' });
+      // The turn's usage and request count still happened and are billed.
+      err.turn = turn;
+      err.resultType = completed.resultType;
+      throw err;
+    }
     return turn;
   } finally {
     clearTimeout(timer);
@@ -545,8 +557,5 @@ module.exports = {
   openSession,
   runTurn,
   TurnError,
-  workspaceKeyFor,
-  waitForMcp,
-  RUNTIME_PREFERENCES,
   allowOnce,
 };

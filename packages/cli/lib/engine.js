@@ -22,7 +22,6 @@ function appBundleEngines(env = process.env) {
   }
   return ['/opt/ZCode/resources/glm/zcode.cjs', '/usr/lib/zcode/resources/glm/zcode.cjs', '/usr/share/zcode/resources/glm/zcode.cjs'];
 }
-const APP_BUNDLE_ENGINE = appBundleEngines()[0];
 
 // The engine this package was tested with: the @zcode-agent/engine
 // dependency (1.0), which mirrors the app's Resources layout
@@ -206,7 +205,5 @@ module.exports = {
   engineVersion,
   EngineNotFoundError,
   BuiltinConfigNotFoundError,
-  APP_BUNDLE_ENGINE,
-  appBundleEngines,
   packagedEngine,
 };

@@ -48,6 +48,9 @@ function setupFake(script = { turns: [{ response: 'ok' }] }) {
   fs.writeFileSync(scriptFile, JSON.stringify(script));
 
   Object.assign(process.env, {
+    // The work dir is a plain directory even when the temp dir lies inside
+    // a git checkout (TMPDIR under a repo): git must not look above it.
+    GIT_CEILING_DIRECTORIES: base,
     ZAI_CODE_HOME: root,
     ZAI_CODE_LIVE_DIR: live,
     ZAI_CODE_ENGINE: FAKE_ENGINE,

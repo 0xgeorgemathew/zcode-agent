@@ -23,7 +23,8 @@ const USAGE = `usage:
   zcode-agent plan wait|status <name> [--timeout-ms n] [--json]
                                                one summary line: {type:"plan",name,status,sessions,briefs}
   zcode-agent plan resume <name> [message…] [--session <id>]
-                                               resume failed/partial/blocked sessions, restart supervision
+                                               resume every session that ended without completing,
+                                               restart supervision
   zcode-agent login                            store a Z.ai API key piped on stdin (optional
                                                with ZAI_API_KEY or the ZCode app's key)
   zcode-agent doctor [--json] [--install-browser]
@@ -64,8 +65,8 @@ task contract (task only):
                         zcode-agent resume <id> "<answers>" executes the task
   --unit "n: goal [owns a,b]"  repeatable: one subagent per unit inside this
                         session; owns must lie within --owns and be disjoint
-  --visual <criterion>  repeatable: after the work an independent image-capable
-                        verifier (GLM-5.3-Flash, fresh session) serves the app on
+  --visual <criterion>  repeatable: after the work an independent verifier
+                        (GLM-5.3-Flash, fresh session) serves the app on
                         $ZCODE_PORT, screenshots it and judges each criterion
   --viewport <WxH>      repeatable viewport for --visual (default 390x844, 1440x900)
   --serve <cmd>         command that serves the app for --visual (honours $ZCODE_PORT)
@@ -83,6 +84,7 @@ plan (zcode-agent plan run <plan.json>):
   --preflight           plan run: read-only preflight of every session ("<id>.pre"),
                         prints the questions as one brief per session (exit 10 if any)
   --detach              plan run/resume: supervise in a background process
+  --cwd <dir>           plan check/run: workspace, when the plan file sets no cwd
   --id <name>           plan name (default: the file's basename)
   --session <id>        plan resume: only this session
 
@@ -98,8 +100,9 @@ acp (zcode-agent acp):
                         --skills, --no-skills, --inherit-desktop
 
 execution:
-  --model <id>          glm-5.3 | glm-5.3-flash (+aliases). default: glm-5.3
-  --effort <level>      low | high | max for both models (zcode-agent doctor lists the
+  --model <id>          glm-5.4 | glm-5.3 | glm-5.3-flash (+aliases: 5.4, 5.3, flash).
+                        default: glm-5.4 (sees images; GLM-5.3 does not)
+  --effort <level>      low | high | max for every model (zcode-agent doctor lists the
                         engine's levels per model); an unsupported level exits 2
                         before any spawn. default: high
   --timeout-ms <n>      whole invocation incl. checks/repairs (default 600000;
@@ -107,8 +110,10 @@ execution:
   --profile <name>      subagent profile (agent command; default general-purpose)
   --mcp <json|@f>       add MCP servers (repeatable), on top of the desktop's
   --hermetic            don't inherit the ZCode app's MCP servers and skills
-                        (inherited by default; OAuth-only remote servers never are)
-  --no-browser          drop the desktop's playwright MCP server (on by default)
+                        (inherited by default; OAuth-only remote servers never are).
+                        The Playwright browser server stays: see --no-browser
+  --no-browser          drop the playwright MCP server (on by default, also with
+                        --hermetic)
   --mcp-list            print the effective MCP server set as JSON and exit
   --skills <dir>        add skills (repeatable): one skill dir or a root of them
   --no-skills           empty skill set
@@ -129,7 +134,7 @@ output:
   -p, --prompt <t>      prompt text (alias for positional prompt)
   --session <id>        run: continue a session (zcode-agent id or engine sess_ id)
   --install-browser     doctor: install the default Playwright server's Chromium
-  --version, --help
+  --version, -v         --help, -h
 
 exit codes: 0 completed · 2 usage · 3 no key · 4 no engine · 5 failed ·
   6 agent: no subagent · 7 workspace conflict / session busy · 8 partial or
@@ -185,7 +190,7 @@ function parseArgv(argv) {
       effort: DEFAULT_EFFORT,
       cwd: process.cwd(),
       json: false,
-      fresh: false,
+      fresh: false, // accepted and ignored: pre-0.4 callers pass it (every session has had its own HOME since)
       timeoutMs: undefined,
       profile: 'general-purpose',
       prompt: undefined,
@@ -252,9 +257,11 @@ function parseArgv(argv) {
     ['--thinking', ['thinking', true]], ['--no-thinking', ['thinking', false]], ['--stream', ['stream', true]],
     ['--full', ['full', true]], ['--any', ['any', true]], ['--all', ['all', true]], ['--app', ['app', true]], ['--install-browser', ['installBrowser', true]], ['--preflight', ['preflight', true]],
   ]);
-  const numeric = (flag, value, { min = 1 } = {}) => {
+  const numeric = (flag, value, { min = 1, integer = false } = {}) => {
     const n = Number(value);
-    if (!Number.isFinite(n) || n < min) fail(2, `${flag} must be a number >= ${min}, got "${value}".`);
+    if (!Number.isFinite(n) || n < min || (integer && !Number.isInteger(n))) {
+      fail(2, `${flag} must be ${integer ? 'an integer' : 'a number'} >= ${min}, got "${value}".`);
+    }
     return n;
   };
 
@@ -267,7 +274,7 @@ function parseArgv(argv) {
       out.given.add(key);
       if (key === 'timeoutMs' || key === 'checkTimeoutMs') out.flags[key] = numeric(arg, value);
       else if (key === 'stallMin') out.flags[key] = numeric(arg, value, { min: 0 });
-      else if (key === 'maxRepairs') out.flags[key] = numeric(arg, value, { min: 0 });
+      else if (key === 'maxRepairs') out.flags[key] = numeric(arg, value, { min: 0, integer: true });
       else if (key === 'mcpSpecs') out.flags.mcpSpecs.push(parseMcpSpec(value));
       else if (key === 'skillsDirs') {
         if (!isDirectory(value)) fail(2, `--skills requires an existing directory, got "${value}".`);
@@ -291,7 +298,7 @@ function parseArgv(argv) {
       process.stdout.write((text || USAGE) + '\n');
       process.exit(0);
     }
-    if (arg === '--version') {
+    if (arg === '--version' || arg === '-v' || arg === '-V') {
       process.stdout.write(require('../package.json').version + '\n');
       process.exit(0);
     }
@@ -303,6 +310,11 @@ function parseArgv(argv) {
       const hint = suggestFlag(arg, [...valueFlags.keys(), ...listFlags.keys(), ...boolFlags.keys()]);
       fail(2, `unknown flag ${arg} (${hint ? `did you mean ${hint}?` : 'see zcode-agent --help'})`);
     }
+    // A short flag we do not have (-x, -version) must not become a prompt
+    // and a paid turn. Prompt text that starts with a dash goes after `--`.
+    if (/^-[A-Za-z][\w-]*$/.test(arg)) {
+      fail(2, `unknown flag ${arg} (see zcode-agent --help; put prompt text that starts with "-" after --)`);
+    }
     if (out.prompts.length === 0 && out.command === 'run' && !out.commandSet && COMMANDS.has(arg)) {
       out.command = arg === 'list' ? 'status' : arg;
       out.commandSet = true;
@@ -312,7 +324,24 @@ function parseArgv(argv) {
   }
 
   const cmd = out.command;
-  if (out.flags.prompt !== undefined) out.prompts.unshift(out.flags.prompt);
+  // A mistyped command must not become a prompt and a paid turn: one bare
+  // word next to a command name is refused. Distance 2 only from five
+  // letters, so the one-word prompt "test" (2 from "task") still runs.
+  if (!out.commandSet && out.prompts.length === 1 && out.flags.prompt === undefined && !/\s/.test(out.prompts[0])) {
+    const word = out.prompts[0];
+    const near = [...COMMANDS].filter((c) => !c.startsWith('__'))
+      .map((c) => [c, editDistance(word.toLowerCase(), c)])
+      .sort((a, b) => a[1] - b[1])[0];
+    if (near && near[1] <= (word.length >= 5 ? 2 : 1)) {
+      fail(2, `unknown command "${word}" (did you mean "${near[0]}"?). To send it as a prompt: zcode-agent run ${word}`);
+    }
+  }
+  // -p is the prompt of run/task/agent; elsewhere (resume <id> -p "…") it is
+  // the message and must not displace the id or the subcommand.
+  if (out.flags.prompt !== undefined) {
+    if (cmd === 'run' || cmd === 'task' || cmd === 'agent') out.prompts.unshift(out.flags.prompt);
+    else out.prompts.push(out.flags.prompt);
+  }
   if (cmd !== 'task') {
     for (const key of TASK_ONLY) {
       if (cmd === 'plan' && key === 'preflight') continue;
@@ -324,6 +353,10 @@ function parseArgv(argv) {
   if (cmd === 'plan' || cmd === '__plan') {
     for (const key of ['label', 'owns', 'touch', 'allowOverlap', 'model', 'effort', 'profile']) {
       if (out.given.has(key)) fail(2, `--${flagName(key)} is not valid with "zcode-agent plan"; set it in the plan file.`);
+    }
+    // Plan sessions are started without these: refused rather than dropped.
+    for (const key of ['mcpSpecs', 'mcpInherit', 'hermetic', 'noBrowser', 'skillsDirs', 'noSkills', 'inheritDesktop', 'includeReasoning', 'stream']) {
+      if (out.given.has(key)) fail(2, `--${flagName(key)} is not valid with "zcode-agent plan" (plan sessions run with the default setup; ZCODE_HERMETIC=1 and ZCODE_INHERIT_DESKTOP=1 apply to them).`);
     }
   }
   if (cmd === 'resume' || cmd === '__exec') {
@@ -361,26 +394,27 @@ function parseArgv(argv) {
   return out;
 }
 
+function editDistance(a, b) {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return row[b.length];
+}
+
 // Closest known flag by edit distance (<= 2), or null.
 function suggestFlag(arg, known) {
-  const dist = (a, b) => {
-    const row = Array.from({ length: b.length + 1 }, (_, j) => j);
-    for (let i = 1; i <= a.length; i++) {
-      let prev = row[0];
-      row[0] = i;
-      for (let j = 1; j <= b.length; j++) {
-        const tmp = row[j];
-        row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
-        prev = tmp;
-      }
-    }
-    return row[b.length];
-  };
   let best = null;
   let bestD = Infinity;
   for (const k of known) {
     if (!k.startsWith('--')) continue;
-    const d = dist(arg, k);
+    const d = editDistance(arg, k);
     if (d < bestD) { best = k; bestD = d; }
   }
   return best && bestD <= 2 ? best : null;

@@ -36,7 +36,7 @@ function svg(p) {
   // Title block.
   t(40, 46, 'ZCODE-AGENT · ONE TASK, FROM CONTRACT TO HANDBACK', { face: 'monoBold', size: 11, fill: p.muted, spacing: 2.4 });
   t(W - 40, 46, 'also in your editor: zcode-agent acp', { face: 'mono', size: 11, fill: p.look, anchor: 'end' });
-  const head = [['Your agent decides.', p.agent], ['GLM-5.3 builds and checks.', p.flash], ['Flash looks.', p.look]];
+  const head = [['Your agent decides.', p.agent], ['GLM-5.4 builds and checks.', p.flash], ['Flash looks.', p.look]];
   // The largest size, in half points, that fits the width.
   const fullWidth = (size) => head.reduce((w, [s]) => w + measure(s, 'display', size), 0) + measure(' ', 'display', size) * (head.length - 1);
   let HEAD = 38;
@@ -85,7 +85,7 @@ function svg(p) {
   const COL = { build: [L, 584], check: [602, 716], look: [736, 852] };
   const BUS = 882;
   const HY = AY + 60;
-  [['BUILD', 'GLM-5.3 · effort high', COL.build, p.flash], ['CHECK', 'your commands', COL.check, p.flash], ['LOOK', 'GLM-5.3-Flash', COL.look, p.look]].forEach(([name, who, [x0], c]) => {
+  [['BUILD', 'GLM-5.4 · effort high', COL.build, p.flash], ['CHECK', 'your commands', COL.check, p.flash], ['LOOK', 'GLM-5.3-Flash', COL.look, p.look]].forEach(([name, who, [x0], c]) => {
     t(x0, HY, name, { face: 'monoBold', size: 10.5, fill: c, spacing: 1.4 });
     t(x0, HY + 15, who, { face: 'mono', size: 10.5, fill: p.muted });
   });
@@ -146,7 +146,7 @@ function svg(p) {
   t(cx + 14 + measure(lead, 'monoBold', 12) + 12, RY + 4.5, json, { face: 'mono', size: 12 });
   t(40, 524, 'Questions come back the same way, with options and a recommendation. Your agent answers in one line.', { face: 'sans', size: 12.5, fill: p.muted });
 
-  return out.svg('zcode-agent: your agent writes the decisions and a task contract; zcode-agent runs parallel GLM-5.3 sessions that build, run your checks and repair failures, and has a fresh GLM-5.3-Flash session judge screenshots; one handback line returns.');
+  return out.svg('zcode-agent: your agent writes the decisions and a task contract; zcode-agent runs parallel GLM-5.4 sessions that build, run your checks and repair failures, and has a fresh GLM-5.3-Flash session judge screenshots; one handback line returns.');
 }
 
 for (const [name, palette] of Object.entries(PALETTES)) writeFileSync(join(here, `hero-${name}.svg`), svg(palette));

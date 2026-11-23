@@ -111,4 +111,4 @@ function buildContract({ base = {}, baseDir = process.cwd(), objective = '', add
   return contract;
 }
 
-module.exports = { buildContract, validateUnits };
+module.exports = { buildContract };

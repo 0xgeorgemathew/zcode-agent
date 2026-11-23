@@ -60,7 +60,7 @@ test('priceOf splits cached input; unknown models have no price; ZCODE_PRICES ov
   // 1M input of which 0.9M cached, 0.1M output on Flash: 0.1*0.15 + 0.9*0.03 + 0.1*0.5
   const usd = cost.priceOf('GLM-5.3-Flash', { input: 1e6, cached: 9e5, output: 1e5 });
   assert.ok(Math.abs(usd - (0.015 + 0.027 + 0.05)) < 1e-9);
-  assert.ok(cost.priceOf('glm-5.3', { input: 1e6, output: 0 }) - 1.4 < 1e-9);
+  assert.ok(Math.abs(cost.priceOf('glm-5.3', { input: 1e6, output: 0 }) - 1.4) < 1e-9);
   assert.equal(cost.priceOf('mystery', { input: 1 }), null);
   const env = { ZCODE_PRICES: JSON.stringify({ 'GLM-5.3-Flash': { output: 1 }, mystery: { input: 2, output: 2 } }) };
   assert.ok(Math.abs(cost.priceOf('GLM-5.3-Flash', { output: 1e6 }, env) - 1) < 1e-9);
@@ -89,6 +89,20 @@ test('sessionCost reads the engine DB (all engine sessions, every model); falls 
   assert.ok(Math.abs(e.usd - 0.15) < 1e-9);
   store.createSession('c-3', { kind: 'task', cwd: work, model: 'GLM-5.3-Flash', effort: 'max', owns: [], checks: [] });
   assert.equal(cost.sessionCost(store.readSession('c-3')), null);
+
+  // GLM-5.4 has no published API price yet: priced provisionally, marked as an estimate.
+  store.createSession('c-4', { kind: 'task', cwd: work, model: 'GLM-5.4', effort: 'high', owns: [], checks: [] });
+  engineDb(cost.engineDbOf('c-4'), [{ model: 'GLM-5.4', input: 1e6, cached: 0, output: 0 }]);
+  const p = cost.sessionCost(store.readSession('c-4'));
+  assert.ok(Math.abs(p.usd - 1.4) < 1e-9);
+  assert.equal(p.estimate, true);
+  // A caller's own price is not provisional.
+  const own = { ...process.env, ZCODE_PRICES: JSON.stringify({ 'GLM-5.4': { input: 2 } }) };
+  store.createSession('c-5', { kind: 'task', cwd: work, model: 'GLM-5.4', effort: 'high', owns: [], checks: [] });
+  engineDb(cost.engineDbOf('c-5', own), [{ model: 'GLM-5.4', input: 1e6, cached: 0, output: 0 }]);
+  const o = cost.sessionCost(store.readSession('c-5', own), own);
+  assert.ok(Math.abs(o.usd - 2) < 1e-9);
+  assert.equal(o.estimate, undefined);
 });
 
 test('zcode-agent cost <dir>: sessions in the dir and below, totals, --json, --app; --app only with cost', { skip: !sqlite }, () => {
@@ -143,4 +157,15 @@ test('watch shows a streaming request as thinking with its length, not as a stal
   const r = spawnSync(process.execPath, [BIN, 'watch', 'th-1'], { cwd: work, env: process.env, encoding: 'utf8', timeout: 1500 });
   assert.match(r.stdout, /^th-1  running verifying round 1 .* last: Skill 18m ago  thinking 18m 42\.0k chars  req 15  sub 0/m);
   assert.doesNotMatch(r.stdout, /STALLED/);
+});
+
+test('usage of a model with no price is carried to the total, not silently counted as $0', () => {
+  const a = { requests: 1, input: 10, cached: 0, cacheWrite: 0, output: 1, usd: 0, unpriced: ['GLM-4.6'] };
+  const b = { requests: 1, input: 10, cached: 0, cacheWrite: 0, output: 1, usd: 0.5 };
+  const sum = cost.sumCosts([a, b]);
+  assert.deepEqual(sum.unpriced, ['GLM-4.6']);
+  assert.equal(sum.usd, 0.5);
+  assert.equal(cost.sumCosts([b]).unpriced, undefined);
+  assert.equal(cost.formatTokens(999999), '1.0M', 'never "1000.0k"');
+  assert.equal(cost.formatTokens(999949), '999.9k');
 });

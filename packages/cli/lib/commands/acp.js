@@ -5,6 +5,7 @@
 // session through ACP config options.
 const { serve } = require('../acp.js');
 const { MODE_IDS } = require('../acp-map.js');
+const { effortProblem } = require('../models.js');
 
 module.exports = function acpCommand(parsed) {
   const { flags, given } = parsed;
@@ -15,6 +16,13 @@ module.exports = function acpCommand(parsed) {
   const mode = flags.mode || process.env.ZCODE_ACP_MODE || 'build';
   if (!MODE_IDS.includes(mode)) {
     process.stderr.write(`zcode-agent: unknown mode "${mode}". --mode accepts ${MODE_IDS.join(' | ')}.\n`);
+    process.exit(2);
+  }
+  // As for every other command: an effort the model does not accept is a
+  // usage error, not silently replaced by the model's highest level.
+  const problem = effortProblem(flags.model, flags.effort);
+  if (problem) {
+    process.stderr.write(`zcode-agent: ${problem}\n`);
     process.exit(2);
   }
   serve({

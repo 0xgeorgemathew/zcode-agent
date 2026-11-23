@@ -19,6 +19,24 @@ if (cli.dependencies['@zcode-agent/engine'] !== engine.version) {
   problems.push(`zcode-agent depends on @zcode-agent/engine ${cli.dependencies['@zcode-agent/engine']}, the package is ${engine.version}`);
 }
 if (engine.version.split('-')[0] !== pins.engineVersion) problems.push(`engine package ${engine.version} vs engine.json ${pins.engineVersion}`);
+// An `npm install zcode-agent` at the root adds the package to itself (0.7.0
+// and again in 1.3.x): the workspace root must stay dependency-free.
+const root = read('package.json');
+if (root.dependencies || root.devDependencies) problems.push('the root package.json has dependencies (a stray `npm install` at the repo root?)');
+const changelog = readFileSync(join(repo, 'CHANGELOG.md'), 'utf8');
+if (!new RegExp(`^## ${cli.version.replace(/\./g, '\\.')}\\b`, 'm').test(changelog)) {
+  problems.push(`CHANGELOG.md has no "## ${cli.version}" entry`);
+}
+// Notes still under "Unreleased", or a version that is already tagged, mean
+// the version was not bumped for what is about to be published.
+if (/^## Unreleased\s*\n+(?!## )\S/m.test(changelog)) problems.push('CHANGELOG.md has notes under "## Unreleased": move them under the version being released');
+let tagged = '';
+try {
+  tagged = execFileSync('git', ['tag', '--list', `v${cli.version}`], { cwd: repo, encoding: 'utf8' }).trim();
+} catch {
+  /* not a git checkout: nothing to compare */
+}
+if (tagged) problems.push(`v${cli.version} is already tagged: bump the version in packages/cli/package.json`);
 const info = join(repo, 'packages/engine/dist/BUILD-INFO.json');
 if (!existsSync(info)) problems.push('engine not built: npm run build:engine');
 else {

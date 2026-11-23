@@ -18,8 +18,8 @@ function clip(text, max) {
 const empty = (v) =>
   v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
 
+// A failing check (passing ones are only counted).
 function briefCheck(c) {
-  if (c.ok) return { command: c.command, ok: true };
   const out = { command: c.command, ok: false, exitCode: c.exitCode ?? null };
   if (c.timedOut) out.timedOut = true;
   out.tail = String(c.output || '').slice(-TAIL_MAX);
@@ -106,4 +106,4 @@ function buildBrief(result) {
   return out;
 }
 
-module.exports = { buildBrief, BRIEF_SCHEMA };
+module.exports = { buildBrief };

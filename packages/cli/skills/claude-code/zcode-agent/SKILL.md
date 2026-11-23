@@ -1,13 +1,13 @@
 ---
 name: zcode-agent
-description: Delegate scoped implementation work to the zcode-agent CLI (cheap GLM-5.3 executor with Playwright; an independent GLM-5.3-Flash vision verifier judges UI) and consume its compact verified handback. Use when you are orchestrating: you make the product, design and logic decisions once, then zcode-agent implements, tests, visually verifies and repairs — in one session with subagent units, several parallel sessions, or a dependency plan — while you spend tokens only on decisions and exceptions.
+description: Delegate scoped implementation work to the zcode-agent CLI (cheap GLM-5.4 executor with Playwright; an independent GLM-5.3-Flash vision verifier judges UI) and consume its compact verified handback. Use when you are orchestrating: you make the product, design and logic decisions once, then zcode-agent implements, tests, visually verifies and repairs — in one session with subagent units, several parallel sessions, or a dependency plan — while you spend tokens only on decisions and exceptions.
 ---
 
 # Operating zcode-agent as an executor
 
 zcode-agent is a CLI execution engine. You decide; it builds. It implements a scoped task in its own session, runs your checks itself, has a fresh, independent vision verifier screenshot and judge UI when you ask, repairs failures within a budget, and returns a small structured handback.
 
-**The point is cost.** Your tokens are the expensive ones; GLM-5.3's are cheap. Your tokens go to decisions and exceptions. Everything mechanical — writing code, running builds and tests, reading diffs, looking at screenshots, fixing small failures — is zcode-agent's. If you are doing any of that after dispatch, you are paying twice.
+**The point is cost.** Your tokens are the expensive ones; GLM's are cheap. Your tokens go to decisions and exceptions. Everything mechanical — writing code, running builds and tests, reading diffs, looking at screenshots, fixing small failures — is zcode-agent's. If you are doing any of that after dispatch, you are paying twice.
 
 Check readiness once per machine: `zcode-agent doctor` (exit 3 → no key: the user runs `zcode-agent login` or sets `ZAI_API_KEY`; with the ZCode app installed its key, MCP servers and skills are used automatically). Don't run `--help` or a bare `zcode-agent status`: everything you need is here.
 
@@ -77,11 +77,11 @@ Parallel sessions cost you nothing extra while they run: one background `wait` o
 | files | `--file path` | files to read first (don't also pass them as `--context @`) |
 | context | `--context "…"` / `--context @file` | background that isn't a decision |
 | acceptance | `--accept "…"` | criteria beyond checks and visuals |
-| everything | `--task contract.json` | keys: objective, scope, constraints, decisions, design, acceptance, checks, visual, viewports, units, files, references, context, owns, touch, limits, model, effort |
+| everything | `--task contract.json` | keys: objective, scope, constraints, decisions, design, acceptance, checks, visual, viewports, units, serve, files, references, context, owns, touch, limits, model, effort |
 
-Environment: by default the executor gets the ZCode app's MCP servers and user skills (OAuth-only remote servers excluded) plus zcode-agent's own executor instructions; `--hermetic` gives it only your `--mcp` servers and `--skills`. Leave the default unless a run needs to be reproducible on another machine.
+Environment: by default the executor gets the ZCode app's MCP servers and user skills (OAuth-only remote servers excluded) plus zcode-agent's own executor instructions; `--hermetic` gives it only your `--mcp` servers and `--skills`, plus the Playwright browser (`--no-browser` drops that). Leave the default unless a run needs to be reproducible on another machine.
 
-Model and effort: don't pass `--model` or `--effort`. Everything runs on GLM-5.3 at effort `high` by default: sessions, units and plans. The visual verifier always runs on GLM-5.3-Flash, because only Flash can see images. Use `--model flash` when the user asks for it, or when the executor itself should look at screenshots or attached images (GLM-5.3 can't); it is cheaper and faster too. `--effort low|high|max`. Other values are refused before anything starts.
+Model and effort: don't pass `--model` or `--effort`. Everything runs on GLM-5.4 at effort `high` by default: sessions, units and plans; it can look at screenshots and attached images itself. The independent visual verifier runs on GLM-5.3-Flash, the cheapest model that sees images. Use `--model flash` when the user asks for it (cheaper and faster), and `--model glm-5.3` only when asked. `--effort low|high|max`. Other values are refused before anything starts.
 
 ## Running
 
@@ -90,7 +90,7 @@ zcode-agent task --detach --id <id> --cwd <repo> [flags] "<objective>"   # print
 zcode-agent wait <id…> --timeout-ms 7000000 --json --quiet               # in the background; 124 = still running: wait again
 zcode-agent wait <id…> --any --timeout-ms 7000000 --json --quiet         # return on the first that finishes
 zcode-agent resume <id> "<answer or follow-up>" --detach                 # same session, context intact
-zcode-agent result <id> [--full]                                         # brief again, or the full record
+zcode-agent result <id> --json [--full]                                  # brief again, or the full record
 zcode-agent cancel <id>
 ```
 
@@ -98,9 +98,10 @@ Plans:
 
 ```sh
 zcode-agent plan check plan.json
-zcode-agent plan run plan.json --detach [--preflight]
-zcode-agent plan wait <name> --timeout-ms 7000000 --json  # in the background; one line per session, details only for non-completed
-zcode-agent plan resume <name> ["<message>"]              # resume failed/partial, relaunch skipped
+zcode-agent plan run plan.json --detach
+zcode-agent plan run plan.json --preflight                # foreground; prints only the questions
+zcode-agent plan wait <name> --timeout-ms 7000000 --json  # in the background; one summary line, briefs only for non-completed sessions
+zcode-agent plan resume <name> ["<message>"]              # resume every non-completed session, relaunch skipped
 zcode-agent plan resume <name> --session <id> "<answer>"  # answer one blocked session
 ```
 
@@ -122,7 +123,7 @@ Wait once, in the background: run `zcode-agent plan wait <name> --timeout-ms 700
 | `blocked` | 10 | answer `questions` (they come with options and a recommendation) via `zcode-agent resume <id> "<answer>"`, and add the answer to your decisions file |
 | `partial` | 8 | read `issues` / `unresolved` / unmet `visual` / `scopeViolations`; resume with one-line guidance or re-scope |
 | `failed` | 8/5/124 | read the failing check `tail` or `error`; resume with guidance |
-| `unverified` | 9 | you forgot checks: resume with a check added |
+| `unverified` | 9 | nothing confirmed it: no checks ran, or the executor gave no usable "done" report. Resume with a check added |
 | `cancelled` | 130 | resume if wanted |
 
 ## Hard rules after dispatch
@@ -130,7 +131,7 @@ Wait once, in the background: run `zcode-agent plan wait <name> --timeout-ms 700
 - Don't open files a `completed` session changed. Don't re-run checks it ran. Don't look at its screenshots.
 - Don't poll `status`; use `wait` (or `plan wait`) once, in the background if you like, and act on its exit.
 - Don't fix code yourself; `resume` the session with one line.
-- Need to know something about the result? `zcode-agent result <id> --full` first; read code only as a last resort.
+- Need to know something about the result? `zcode-agent result <id> --json --full` first; read code only as a last resort.
 - Don't ask zcode-agent to commit, push, publish or deploy unless the user asked; when they did, make it its own final session gated on everything else being `completed`.
 
 ## Example: a marketing one-pager with an application form
@@ -166,4 +167,4 @@ You read the empty repo, decide the design system, copy, motion, form logic and 
 
 ## Exit codes
 
-0 completed · 2 usage (bad flag, contract, plan, effort, or duplicate id) · 3 no key · 4 no engine · 5 failed · 6 `agent` had no subagent · 7 workspace conflict / session busy · 8 partial or checks failing · 9 unverified · 10 blocked · 124 timeout (for `wait`: still running) · 130 cancelled.
+0 completed · 2 usage (bad flag, contract, plan, effort, duplicate id, or a mistyped command) · 3 no key · 4 no engine · 5 failed · 6 `agent` had no subagent · 7 workspace conflict / session busy / plan name taken · 8 partial or checks failing · 9 unverified · 10 blocked · 124 timeout (for `wait`: still running) · 130 cancelled. `plan run|wait`: 0 all completed · 10 a session is blocked · 8 otherwise · 124 still running.

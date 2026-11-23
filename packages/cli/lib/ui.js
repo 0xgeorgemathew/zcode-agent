@@ -5,7 +5,7 @@
 // are unset, and nothing animates — the feed is append-only lines, so a
 // non-interactive log reads exactly like the terminal did.
 //
-//   ▸ zcode zc-1a2b3c4d  task  GLM-5.3 · effort high   session header
+//   ▸ zcode zc-1a2b3c4d  task  GLM-5.4 · effort high   session header
 //   ● executing                                             phase
 //   → Edit · ✓ Edit · ✗ Bash                                tools (dim)
 //   ⇢ subagent started / returned                           subagents
@@ -199,7 +199,8 @@ function formatResult(r, { color = false } = {}) {
   if (r.error && r.error.message && !(r.issues || []).includes(r.error.message)) {
     L.push(`error    ${r.error.kind}: ${r.error.message.split('\n')[0]}`);
   }
-  if (r.status !== 'completed' && r.status !== 'cancelled') {
+  // An ACP session continues in its ACP client, not with `resume`.
+  if (r.status !== 'completed' && r.status !== 'cancelled' && r.kind !== 'acp') {
     L.push(c.dim(`next     zcode-agent resume ${r.id} "<message>"`));
   }
   return L.join('\n') + '\n';
@@ -232,7 +233,11 @@ function formatSessionView(v, { events = [] } = {}) {
     L.push(`  activity ${v.activity.toolCalls || 0} tool calls · ${v.activity.subagentsStarted || 0} subagents${v.activity.lastTool ? ` · last ${v.activity.lastTool}` : ''} · ${v.activity.lastEventAt || ''}`);
   }
   if (v.idleMs !== undefined) L.push(`  idle     ${Math.round(v.idleMs / 1000)}s since the last engine event${v.stalled ? '  STALLED?' : ''}`);
-  if (v.state === 'interrupted') L.push(`  the owning process is gone; continue with: zcode-agent resume ${v.id}`);
+  if (v.state === 'interrupted') {
+    L.push(v.kind === 'acp'
+      ? '  the ACP agent that ran it is gone; reopen the session in the ACP client'
+      : `  the owning process is gone; continue with: zcode-agent resume ${v.id}`);
+  }
   if (events.length) {
     L.push('  recent');
     for (const e of events) {
