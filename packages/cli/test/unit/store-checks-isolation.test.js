@@ -162,6 +162,91 @@ test('argv: task flags, session flags and defaults parse without spawning anythi
   assert.deepEqual(parseArgv(['resume', 'page-2', 'use', 'blue']).prompts, ['page-2', 'use', 'blue']);
   const run = parseArgv(['hello', 'status']);
   assert.equal(run.command, 'run', 'only the first word can be a command');
-  assert.equal(run.flags.model, 'GLM-5.3');
+  assert.equal(run.flags.model, 'GLM-5.4');
   assert.equal(run.flags.effort, 'high');
+});
+
+// --- 1.4 ------------------------------------------------------------------------------
+
+test('checks: a check is over when its shell exits; what it left running dies with it', async () => {
+  const { runCheck, runChecks } = require('../../lib/checks.js');
+  const started = Date.now();
+  const r = await runCheck('sleep 30 & echo $!', { cwd: base, timeoutMs: 20000 });
+  assert.equal(r.ok, true, 'a background child does not turn a pass into a timeout');
+  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+  const pid = Number(r.output.trim());
+  await new Promise((res) => setTimeout(res, 200));
+  assert.throws(() => process.kill(pid, 0), 'the background child was killed');
+
+  const crashed = await runCheck('kill -SEGV $$', { cwd: base });
+  assert.equal(crashed.ok, false);
+  assert.equal(crashed.exitCode, null);
+  assert.match(crashed.output, /killed by SIGSEGV/);
+
+  // The run's deadline bounds every check, not only the first.
+  const t = Date.now();
+  const results = await runChecks(['sleep 5', 'sleep 5'], { cwd: base, timeoutMs: 20000, deadline: Date.now() + 300 });
+  assert.ok(results.every((c) => c.timedOut));
+  assert.ok(Date.now() - t < 4000, 'two checks, about the 1 s floor each');
+});
+
+test('--mcp-list prints the server set with credentials redacted', () => {
+  const { spawnSync } = require('node:child_process');
+  const BIN = path.join(__dirname, '..', '..', 'bin', 'zcode-agent.js');
+  const spec = {
+    web: { type: 'http', url: 'https://u:p4ss@x.test/mcp?key=abc123&mode=1', headers: { Authorization: 'Bearer hdr-secret', 'X-Trace': 'keep' } },
+    local: { type: 'stdio', command: 'srv', args: ['--key', 'the-zai-key-0123456789'], env: { API_TOKEN: 'env-secret', LOG_LEVEL: 'debug' } },
+  };
+  const res = spawnSync(process.execPath, [BIN, '--mcp-list', '--hermetic', '--no-browser', '--mcp', JSON.stringify(spec)], {
+    encoding: 'utf8',
+    env: { ...process.env, ZAI_API_KEY: 'the-zai-key-0123456789', ZAI_CODE_LIVE_DIR: path.join(base, 'no-live') },
+  });
+  assert.equal(res.status, 0, res.stderr);
+  for (const secret of ['p4ss', 'abc123', 'hdr-secret', 'env-secret', 'the-zai-key-0123456789']) assert.ok(!res.stdout.includes(secret), secret);
+  const { servers } = JSON.parse(res.stdout);
+  assert.match(servers.web.url, /mode=1/);
+  assert.equal(servers.web.headers['X-Trace'], 'keep');
+  assert.equal(servers.local.env.LOG_LEVEL, 'debug');
+});
+
+test('isolation: one broken skill is left out; it does not fail every session', () => {
+  const { buildEngineHome } = require('../../lib/isolation.js');
+  const live = path.join(base, 'live-skills');
+  const mk = (name) => {
+    fs.mkdirSync(path.join(live, 'skills', name), { recursive: true });
+    fs.writeFileSync(path.join(live, 'skills', name, 'SKILL.md'), `---\nname: ${name}\n---\n`);
+  };
+  mk('good');
+  mk('dangling');
+  fs.symlinkSync(path.join(base, 'nowhere'), path.join(live, 'skills', 'dangling', 'gone.md'));
+  mk('loop');
+  fs.symlinkSync(path.join(live, 'skills', 'loop'), path.join(live, 'skills', 'loop', 'self'), 'dir');
+  for (const root of [path.join(base, 'root-skills'), null]) {
+    const home = fs.mkdtempSync(path.join(base, 'home-'));
+    const built = buildEngineHome({ home, root, key: 'k', live, browser: false });
+    const skills = path.join(home, '.zcode', 'skills');
+    assert.ok(fs.existsSync(path.join(skills, 'good', 'SKILL.md')));
+    assert.ok(fs.existsSync(path.join(skills, 'dangling', 'SKILL.md')), 'copied without the dangling link');
+    assert.ok(!fs.existsSync(path.join(skills, 'dangling', 'gone.md')));
+    assert.deepEqual(built.skillsSkipped, fs.existsSync(path.join(skills, 'loop')) ? [] : ['loop']);
+  }
+});
+
+test('argv: mistyped commands and unknown short flags are refused instead of becoming a paid prompt', () => {
+  const { spawnSync } = require('node:child_process');
+  const BIN = path.join(__dirname, '..', '..', 'bin', 'zcode-agent.js');
+  const run = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: { ...process.env, ZAI_CODE_ENGINE: '/nonexistent' } });
+  const typo = run('stauts');
+  assert.equal(typo.status, 2);
+  assert.match(typo.stderr, /unknown command "stauts" \(did you mean "status"\?\)\. To send it as a prompt: zcode-agent run stauts/);
+  assert.equal(run('-x').status, 2);
+  assert.match(run('-version').stderr, /unknown flag -version/);
+  assert.match(run('-v').stdout, /^\d+\.\d+\.\d+\n$/);
+  const { parseArgv } = require('../../bin/zcode-agent.js');
+  assert.deepEqual(parseArgv(['run', 'stauts']).prompts, ['stauts'], 'an explicit run sends anything');
+  assert.deepEqual(parseArgv(['test']).prompts, ['test'], 'a short word two edits from a command is a prompt');
+  assert.deepEqual(parseArgv(['--', '-x']).prompts, ['-x']);
+  assert.deepEqual(parseArgv(['resume', 'myid', '-p', 'continue']).prompts, ['myid', 'continue'], '-p is the message, not the id');
+  assert.deepEqual(parseArgv(['-p', 'hello', 'world']).prompts, ['hello', 'world']);
+  assert.equal(run('plan', 'run', 'p.json', '--hermetic').status, 2, 'flags a plan would drop are refused');
 });

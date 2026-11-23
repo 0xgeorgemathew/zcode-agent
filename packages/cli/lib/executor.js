@@ -66,8 +66,10 @@ class ExecError extends Error {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Settings a session keeps across invocations (stored as invocation.json).
+// `prompt` (run/agent): a session that never reached the engine (queue
+// timeout, engine start failure) is resumed with what it was asked.
 const SETTING_KEYS = [
-  'kind', 'label', 'cwd', 'model', 'effort', 'timeoutMs', 'maxRepairs', 'checkTimeoutMs',
+  'kind', 'label', 'prompt', 'cwd', 'model', 'effort', 'timeoutMs', 'maxRepairs', 'checkTimeoutMs',
   'checks', 'preflight', 'owns', 'ownsDisplay', 'touch', 'touchDisplay', 'acceptanceDeclared', 'mcpSpecs', 'hermetic', 'noBrowser',
   'skillsDirs', 'noSkills', 'inheritDesktop', 'profile', 'includeReasoning', 'allowOverlap', 'stream',
 ];
@@ -147,7 +149,8 @@ function sumUsage(turns) {
 function usageOf(turns, failedTurns) {
   const all = [...turns, ...failedTurns];
   if (!all.length) return null;
-  const base = sumUsage(turns) || { inputTokens: null, outputTokens: null };
+  // A failed turn that still reported usage (a non-success result) is billed too.
+  const base = sumUsage(all) || { inputTokens: null, outputTokens: null };
   const incomplete = all.some((t) => !t.usage);
   return {
     ...base,
@@ -181,6 +184,7 @@ function exitCodeFor(result) {
       return 130;
     default: {
       const kind = result.error && result.error.kind;
+      if (Number.isInteger(result.error && result.error.exitCode)) return result.error.exitCode;
       if (kind === 'timeout') return 124;
       if (kind === 'no_subagent') return 6;
       if (kind === 'checks_failed') return 8;
@@ -230,6 +234,10 @@ async function execute(inv, opts = {}) {
   const id = inv.id;
   const dir = store.sessionDir(id, env);
   const home = path.join(dir, 'home');
+  // A resumed session's directory may be gone (a removed worktree).
+  if (!fs.existsSync(inv.cwd)) {
+    throw new ExecError(`the workspace of session "${id}" no longer exists: ${inv.cwd}`, { exitCode: 2, kind: 'not_found' });
+  }
   const root = workspaceRoot(inv.cwd);
 
   // --- record ---------------------------------------------------------------
@@ -255,11 +263,13 @@ async function execute(inv, opts = {}) {
   };
   // Resuming a preflight session proceeds to the real task: answers + the
   // full protocol, checks and visual verification from here on.
+  // Stored only once the engine session is open: a resume that never starts
+  // (conflict, queue timeout, engine failure) must leave it a preflight, or
+  // the next resume would skip the task prompt.
   const leavingPreflight = resuming && Boolean(inv.preflight);
+  if (resuming) writeSettings(id, inv, env);
   if (leavingPreflight) inv.preflight = false;
   const preflight = Boolean(inv.preflight);
-  if (resuming) writeSettings(id, inv, env);
-  if (leavingPreflight) store.updateSession(id, { preflight: false }, env);
   const isFirstInvocation = !record.engineSessionId;
   const update = (patch) => store.updateSession(id, patch, env);
 
@@ -468,13 +478,18 @@ async function execute(inv, opts = {}) {
       inheritDesktop: !!inv.inheritDesktop || env.ZCODE_INHERIT_DESKTOP === '1',
       profile: inv.profile,
       model: inv.model,
+      builtinConfig: runtime.builtinConfig,
     });
     before = snapshot(root);
     // Inherited servers that fail to connect: surfaced once in the feed and
     // remembered, so the next sessions skip them for a while.
+    // Health is recorded once per invocation: the verifier engines start
+    // from the same HOME, and one dead server must count as one failure.
     const reportedMcp = new Set();
+    let mcpRecorded = false;
     const rememberMcp = (statuses) => {
-      recordMcpHealth(rootDir(env), statuses, built.mcp.inherited);
+      if (!mcpRecorded) recordMcpHealth(rootDir(env), statuses, built.mcp.inherited, { scrub });
+      mcpRecorded = true;
       for (const name of Object.keys(built.mcp.inherited)) {
         const entry = statuses[name];
         if (!entry || entry.status !== 'failed' || reportedMcp.has(name)) continue;
@@ -490,6 +505,13 @@ async function execute(inv, opts = {}) {
       client = makeClient(runtime, { home, cwd: record.cwd, sessionEnv });
       client.start();
       update({ enginePid: client.child.pid });
+      // openSession knows neither the deadline nor the abort signal: a
+      // cancel or --timeout-ms during engine start kills the engine, which
+      // rejects the pending request (runTurn handles both from here on).
+      const starting = client;
+      const stopStart = () => starting.kill();
+      const startTimer = setTimeout(stopStart, Math.max(0, deadline - Date.now()));
+      if (signal) signal.addEventListener('abort', stopStart, { once: true });
       try {
         session = await openSession(client, {
           workspacePath: record.cwd,
@@ -503,12 +525,21 @@ async function execute(inv, opts = {}) {
         break;
       } catch (err) {
         client.kill();
+        if (signal && signal.aborted) throw new TurnError('cancelled', { kind: 'cancelled' });
+        if (Date.now() >= deadline) throw new TurnError('run exceeded --timeout-ms while the engine was starting', { kind: 'timeout' });
         const transient = /timeout|exited|failed to start|dead/.test(err.message);
-        if (attempt >= 2 || !transient || (signal && signal.aborted) || Date.now() >= deadline) throw err;
+        if (attempt >= 2 || !transient) throw err;
         relay({ type: 'retry', phase: 'open_session', reason: scrub(err.message).slice(0, 300) });
+      } finally {
+        clearTimeout(startTimer);
+        if (signal) signal.removeEventListener('abort', stopStart);
       }
     }
     update({ engineSessionId: session.sessionId });
+    if (leavingPreflight) {
+      writeSettings(id, inv, env);
+      update({ preflight: false });
+    }
 
     // First prompt for this invocation.
     let prompt;
@@ -529,18 +560,25 @@ async function execute(inv, opts = {}) {
           // The port is the one thing that may have changed since the first prompt.
           portChange: record.port && String(record.port) !== sessionEnv.ZCODE_PORT ? sessionEnv.ZCODE_PORT : null,
         });
-    } else if (inv.kind === 'agent') {
-      prompt =
-        `You MUST use the Agent tool (profileId: "${inv.profile}") to accomplish the ` +
-        `task below — do not do the work yourself. When the subagent finishes, ` +
-        `report its agent id and result.\n\nTask: ${inv.resume ? inv.resume.message : inv.prompt}`;
     } else {
-      prompt = inv.resume ? buildResumePrompt(inv.resume.message, { kind: 'run' }) : inv.prompt;
+      // A resume of a session the engine never saw sends what it was first
+      // asked, then the message; a real resume sends the message alone.
+      const unsent = resuming && isFirstInvocation && inv.prompt
+        ? inv.prompt + (inv.resume.message ? `\n\n## Message from the orchestrator\n${inv.resume.message}` : '')
+        : null;
+      if (inv.kind === 'agent') {
+        prompt =
+          `You MUST use the Agent tool (profileId: "${inv.profile}") to accomplish the ` +
+          `task below — do not do the work yourself. When the subagent finishes, ` +
+          `report its agent id and result.\n\nTask: ${unsent || (inv.resume ? inv.resume.message : inv.prompt)}`;
+      } else {
+        prompt = unsent || (inv.resume ? buildResumePrompt(inv.resume.message, { kind: 'run' }) : inv.prompt);
+      }
     }
 
     // The verifier's engine: a NEW engine session (own client: fresh context
-    // and its own browser, separate from the implementer's) on the first
-    // image-capable model. Resolves {client, session}; kills it on failure.
+    // and its own browser, separate from the implementer's) on the verifier
+    // model (models.js visionModel). Resolves {client, session}; kills it on failure.
     const openVerifier = (model, onEvent) => {
       const vclient = makeClient(runtime, { home, cwd: record.cwd, sessionEnv });
       vclient.start();
@@ -681,7 +719,8 @@ async function execute(inv, opts = {}) {
         checks = await runChecks(inv.checks, {
           cwd: record.cwd,
           env: { ...env, ...sessionEnv },
-          timeoutMs: Math.max(1000, Math.min(inv.checkTimeoutMs, deadline - Date.now())),
+          timeoutMs: inv.checkTimeoutMs,
+          deadline,
           signal,
           onEvent: relay,
         });
@@ -696,15 +735,19 @@ async function execute(inv, opts = {}) {
       // zcode, not the implementer, judges the visual criteria. Unmet ones
       // share the repair budget with failing checks; a verifier that could
       // not run (met:null) is reported, not repaired.
+      // Out of time with work still owed (the verifier, or a repair turn) is
+      // a timeout (exit 124, resumable), not "checks failed" or "partial".
+      const outOfTime = (what) => new TurnError(`run exceeded --timeout-ms before ${what}`, { kind: 'timeout' });
       let visualUnmet = [];
-      if (visualDeclared.length && !failures.length && parsed.handback
-          && !(signal && signal.aborted) && Date.now() < deadline) {
+      if (visualDeclared.length && !failures.length && parsed.handback && !(signal && signal.aborted)) {
+        if (Date.now() >= deadline) throw outOfTime('the visual verifier');
         visualEntries = await verifyVisual(verifyRounds + 1);
         visualUnmet = visualEntries.filter((v) => v.met === false);
       }
       dropSpareVerifier(); // checks failed: no verifier this round
       if ((!failures.length && !visualUnmet.length) || repairs >= inv.maxRepairs) break;
-      if ((signal && signal.aborted) || Date.now() >= deadline) break;
+      if (signal && signal.aborted) break;
+      if (Date.now() >= deadline) throw outOfTime('the repair turn');
       repairs++;
       prompt = buildRepairPrompt(failures, { attempt: repairs, maxRepairs: inv.maxRepairs, visual: visualUnmet });
       phase = 'repairing';
@@ -742,6 +785,9 @@ async function execute(inv, opts = {}) {
   // gone): their changes are theirs, not scope violations of ours.
   for (const other of store.listSessions(env)) {
     if (other.id === id || other.workspaceRoot !== root || concurrent.has(other.id)) continue;
+    // Only a session that could have written: one refused before it started
+    // (no engine session) or a read-only preflight excuses nothing.
+    if (!other.engineSessionId || other.preflight) continue;
     if (String(other.updatedAt) >= invocationStart && Array.isArray(other.ownsRoot)) {
       concurrent.set(other.id, other.ownsRoot);
     }
@@ -804,7 +850,8 @@ async function execute(inv, opts = {}) {
       const cmd = plan ? `zcode-agent plan resume ${plan[1]} "continue"` : `zcode-agent resume ${id} "continue"`;
       errorOut = {
         kind: 'timeout',
-        message: `timed out after ${Math.round(inv.timeoutMs / 60000)} min; "${cmd}" picks up from the current files`,
+        // Under a minute in seconds: "0 min" read as if nothing had run.
+        message: `timed out after ${inv.timeoutMs < 60000 ? `${Math.max(1, Math.round(inv.timeoutMs / 1000))} s` : `${Math.round(inv.timeoutMs / 60000)} min`}; "${cmd}" picks up from the current files`,
       };
     } else if (error) errorOut = { kind: error.kind || 'error', message: scrub(error.message) };
     else if (preflightWrote.length) errorOut = { kind: 'preflight_wrote', message: issues[0] };
@@ -844,6 +891,9 @@ async function execute(inv, opts = {}) {
   if (before && !diff) notVerified.push('changed files could not be tracked in this workspace');
   if (subagentNote) issues.push(subagentNote);
   if (verifierEdits.size) issues.push(`verifier edited files: ${[...verifierEdits].join(', ')}`);
+  // deriveStatus copies raw engine/MCP error text into issues, which reach
+  // result.json, the session record and the brief: never the key.
+  issues = issues.map(scrub);
 
   const last = turns[turns.length - 1] || null;
   const response = last ? last.response : '';
@@ -948,4 +998,4 @@ async function execute(inv, opts = {}) {
   return result;
 }
 
-module.exports = { execute, prepareSession, exitCodeFor, ExecError, readSettings, RESULT_SCHEMA };
+module.exports = { execute, prepareSession, exitCodeFor, ExecError, readSettings };

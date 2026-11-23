@@ -7,14 +7,17 @@
 // without an engine DB fall back to the record's usageTotal (no cache split:
 // marked `estimate`). Read-only; never blocks the engine (WAL readers).
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 const store = require('./store.js');
+const { liveDir } = require('./isolation.js');
 
 // USD per million tokens, Z.ai API list prices. ZCODE_PRICES (JSON, same
 // shape, keyed by model id, case-insensitive) overrides or adds models.
+// `provisional`: Z.ai has published no API price yet (GLM-5.4 shipped on the
+// Coding Plan first, 2026-11-23); priced like GLM-5.1 to 5.3, which all list
+// at the same rate, and marked as an estimate until the real price is in.
 const LIST_PRICES = {
+  'GLM-5.4': { input: 1.4, cached: 0.26, output: 4.4, provisional: true },
   'GLM-5.3-Flash': { input: 0.15, cached: 0.03, output: 0.5 },
   'GLM-5.3': { input: 1.4, cached: 0.26, output: 4.4 },
 };
@@ -26,7 +29,8 @@ function priceTable(env = process.env) {
     try {
       const extra = JSON.parse(env.ZCODE_PRICES);
       for (const [k, v] of Object.entries(extra || {})) {
-        if (v && typeof v === 'object') table[k.toLowerCase()] = { ...table[k.toLowerCase()], ...v };
+        // A caller's own price is not provisional.
+        if (v && typeof v === 'object') table[k.toLowerCase()] = { ...table[k.toLowerCase()], provisional: false, ...v };
       }
     } catch {
       /* ignored: list prices */
@@ -80,18 +84,7 @@ function query(file, sql, params = []) {
       }
     }
   }
-  if (params.length) {
-    // The CLI has no bind parameters; callers only bind paths, quoted here.
-    let i = 0;
-    sql = sql.replace(/\?/g, () => `'${String(params[i++]).replace(/'/g, "''")}'`);
-  }
-  const r = spawnSync('sqlite3', ['-readonly', '-json', file, sql], { encoding: 'utf8', timeout: 15000 });
-  if (r.status !== 0) return null;
-  try {
-    return r.stdout.trim() ? JSON.parse(r.stdout) : [];
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 const SUMS = `count(*) AS requests,
@@ -109,6 +102,7 @@ function engineDbOf(id, env = process.env) {
 function fold(rows, env) {
   const total = { requests: 0, input: 0, cached: 0, cacheWrite: 0, output: 0, usd: 0, models: {} };
   const unpriced = [];
+  const table = priceTable(env);
   for (const r of rows) {
     const counts = {
       requests: Number(r.requests) || 0,
@@ -119,6 +113,8 @@ function fold(rows, env) {
     };
     const usd = priceOf(r.model, counts, env);
     if (usd === null) unpriced.push(r.model);
+    const price = table[String(r.model || '').toLowerCase()];
+    if (price && price.provisional && counts.requests + counts.input + counts.output > 0) total.estimate = true;
     total.models[r.model] = { ...counts, usd };
     for (const k of ['requests', 'input', 'cached', 'cacheWrite', 'output']) total[k] += counts[k];
     total.usd += usd || 0;
@@ -200,9 +196,10 @@ function dirSessions(dir, env = process.env) {
 }
 
 // The desktop app's own sessions (its DB, not zcode's) whose directory is
-// `dir` or below it. ZCODE_APP_DB overrides the path (tests).
+// `dir` or below it, in the app directory every other command reads
+// (ZAI_CODE_LIVE_DIR). ZCODE_APP_DB overrides the path (tests).
 function appDb(env = process.env) {
-  return env.ZCODE_APP_DB || path.join(env.HOME || os.homedir(), '.zcode', 'cli', 'db', 'db.sqlite');
+  return env.ZCODE_APP_DB || path.join(liveDir(env), 'cli', 'db', 'db.sqlite');
 }
 
 function appSessions(dir, env = process.env) {
@@ -210,7 +207,9 @@ function appSessions(dir, env = process.env) {
   // The app stores the directory as it was opened: match the given and the
   // symlink-resolved spelling.
   const forms = [...new Set([path.resolve(dir), real(dir)])].map((d) => d.replace(/\/+$/, '') || '/');
-  const where = forms.map(() => '(s.directory = ? OR s.directory LIKE ?)').join(' OR ');
+  // LIKE wildcards in the directory name itself (my_app, 100%) are literal.
+  const like = (d) => `${d === '/' ? '' : d.replace(/[\\%_]/g, '\\$&')}/%`;
+  const where = forms.map(() => "(s.directory = ? OR s.directory LIKE ? ESCAPE '\\')").join(' OR ');
   const rows = query(
     file,
     `SELECT s.id AS id, s.title AS title, s.directory AS cwd, m.model_id AS model, ${SUMS},
@@ -218,7 +217,7 @@ function appSessions(dir, env = process.env) {
      FROM model_usage m JOIN session s ON s.id = m.session_id
      WHERE ${where}
      GROUP BY s.id, m.model_id`,
-    forms.flatMap((d) => [d, `${d === '/' ? '' : d}/%`])
+    forms.flatMap((d) => [d, like(d)])
   );
   if (!rows) return null;
   const byId = new Map();
@@ -246,8 +245,10 @@ function sumCosts(costs) {
   const t = { requests: 0, input: 0, cached: 0, cacheWrite: 0, output: 0, usd: 0 };
   for (const c of costs) {
     if (!c) continue;
-    for (const k of Object.keys(t)) t[k] += c[k] || 0;
+    for (const k of Object.keys(t)) if (k !== 'unpriced') t[k] += c[k] || 0;
     if (c.estimate) t.estimate = true;
+    // Models with no known price add nothing to usd: carried so it shows.
+    if (c.unpriced && c.unpriced.length) t.unpriced = [...new Set([...(t.unpriced || []), ...c.unpriced])];
   }
   return t;
 }
@@ -258,14 +259,12 @@ function formatUsd(usd) {
 }
 
 function formatTokens(n) {
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 999950) return `${(n / 1e6).toFixed(1)}M`; // 999,950 would print "1000.0k"
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
   return String(n);
 }
 
 module.exports = {
-  LIST_PRICES,
-  priceTable,
   priceOf,
   sessionCost,
   dirSessions,

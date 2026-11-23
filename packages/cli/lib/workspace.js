@@ -40,6 +40,22 @@ function workspaceRoot(cwd) {
   return top ? fs.realpathSync(top) : real;
 }
 
+// `abs` with its longest existing prefix resolved through symlinks (the
+// rest, e.g. a glob or a file not created yet, is kept as written).
+function realPrefix(abs) {
+  const tail = [];
+  for (let head = abs; ; ) {
+    try {
+      return path.join(fs.realpathSync(head), ...tail);
+    } catch {
+      const up = path.dirname(head);
+      if (up === head) return abs;
+      tail.unshift(path.basename(head));
+      head = up;
+    }
+  }
+}
+
 // Ownership patterns arrive relative to --cwd; store them relative to the
 // workspace root, posix-style, so every session compares like with like.
 function normalizeOwns(patterns, cwd, root, flag = '--owns') {
@@ -47,7 +63,9 @@ function normalizeOwns(patterns, cwd, root, flag = '--owns') {
   return patterns.map((raw) => {
     const pattern = String(raw).trim();
     if (!pattern) throw new OwnershipError(`${flag} pattern must not be empty`);
-    const abs = path.isAbsolute(pattern) ? pattern : path.join(realCwd, pattern);
+    // An absolute pattern may come through a symlinked path ("$PWD/src");
+    // the root is a real path.
+    const abs = path.isAbsolute(pattern) ? realPrefix(pattern) : path.join(realCwd, pattern);
     const rel = toPosix(path.relative(root, abs));
     if (rel === '' || rel === '.') return '**';
     if (rel.startsWith('../') || rel === '..' || path.isAbsolute(rel)) {
@@ -79,13 +97,16 @@ function globToRegExp(glob) {
       re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
     }
   }
-  return new RegExp(`^${re}$`);
+  // A match owns what lies beneath it, as a plain path does ("packages/*"
+  // owns packages/a/src/x.ts).
+  return new RegExp(`^${re}(?:/.*)?$`);
 }
 
 const hasWildcard = (p) => /[*?]/.test(p);
 
-// A plain path owns itself and everything beneath it; a glob owns its
-// matches. Empty ownership = the whole workspace.
+// A plain path owns itself and everything beneath it; so does each match of
+// a glob (*, **, ?; braces and brackets are literal, as in "app/[id]").
+// Empty ownership = the whole workspace.
 function isOwned(relPath, owns) {
   if (!owns || owns.length === 0) return true;
   return owns.some((pattern) => {
@@ -204,7 +225,10 @@ const HASH_LIMIT = 8 * 1024 * 1024;
 
 function fileSignature(abs) {
   try {
-    const st = fs.statSync(abs);
+    // lstat: a symlink is the link itself (git's view), not whatever changes
+    // inside the directory it points at.
+    const st = fs.lstatSync(abs);
+    if (st.isSymbolicLink()) return `link:${fs.readlinkSync(abs)}`;
     if (!st.isFile()) return `other:${st.mtimeMs}`;
     if (st.size > HASH_LIMIT) return `big:${st.size}:${st.mtimeMs}`;
     return crypto.createHash('sha1').update(fs.readFileSync(abs)).digest('hex');
@@ -218,7 +242,9 @@ function fileSignature(abs) {
 function gitStatus(root) {
   const raw = execFileSync(
     'git',
-    ['-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+    // --no-optional-locks: a snapshot must never hold index.lock against a
+    // `git add` the executor, a parallel session or the user runs meanwhile.
+    ['--no-optional-locks', '-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000, maxBuffer: 64 * 1024 * 1024 }
   );
   const fields = raw.split('\0');
@@ -324,6 +350,8 @@ function diffSnapshots(before, after) {
     } else if (a) {
       if (a.code.includes('D') || a.sig === 'missing') change = 'deleted';
       else if (!b && (a.code === '??' || a.code[0] === 'A')) change = 'added';
+    } else if (b && b.code === '??') {
+      change = 'deleted'; // an untracked file that is gone, not one that went back to clean
     }
     out.push({ path: rel, change });
   }
@@ -371,7 +399,6 @@ module.exports = {
   OwnershipError,
   workspaceRoot,
   normalizeOwns,
-  globToRegExp,
   isOwned,
   isZcodePath,
   ownsOverlap,

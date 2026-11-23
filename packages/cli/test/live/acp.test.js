@@ -1,6 +1,6 @@
 'use strict';
-// LIVE — `zcode-agent acp` against the real engine and GLM-5.3-Flash: a
-// build-mode session asks the client before writing, a denied command
+// LIVE — `zcode-agent acp` against the real engine and the default model
+// (GLM-5.4): a build-mode session asks the client before writing, a denied command
 // never runs, a session reloads in a new process with its history, and
 // cancel stops a running command.
 const { test, afterEach } = require('node:test');
@@ -53,6 +53,8 @@ test('LIVE acp: approve a write, deny a delete, reload with history, cancel a co
     const usage = a.updates.filter((u) => u.update.sessionUpdate === 'usage_update').pop().update;
     assert.ok(usage.used > 0 && usage.size >= 200000, JSON.stringify(usage));
     assert.ok(usage.cost && usage.cost.amount > 0, `GLM cost reported: ${JSON.stringify(usage.cost)}`);
+    const options = (await a.ok('session/set_config_option', { sessionId, configId: 'effort', value: 'low' })).configOptions;
+    assert.equal(options.find((o) => o.id === 'model').currentValue, 'GLM-5.4', 'the default model of an ACP session');
 
     const second = await a.ok('session/prompt', {
       sessionId,

@@ -122,9 +122,20 @@ async function superviseAndReport(name, flags, given) {
 
 async function waitFor(name, flags, given) {
   const deadline = given.has('timeoutMs') ? Date.now() + flags.timeoutMs : Infinity;
+  let { r } = open(name);
   for (;;) {
-    const report = reportOf(name);
-    if (report.status !== 'running') return finish(report, flags);
+    const state = store.readPlanState(name);
+    if (!state) die(2, `no plan "${name}" (zcode-agent plan run <file> starts one).`);
+    // Polled twice a second: statuses only (briefs are built once, at the
+    // end), and a plan file caught mid-save keeps the last good read.
+    try {
+      r = plans.resolvePlan(state.file, state.cwd);
+    } catch (err) {
+      if (!(err instanceof plans.PlanError)) throw err;
+    }
+    if (plans.planReport(name, r, state, { briefs: false }).status !== 'running') {
+      return finish(plans.planReport(name, r, state), flags);
+    }
     if (Date.now() >= deadline) {
       brief(name, flags, 'running');
       process.exit(124);
@@ -259,10 +270,18 @@ async function resume(parsed, name, words) {
     return finish(plans.planReport(name, r, state), flags);
   }
   const message = text || 'Continue: fix the remaining issues.';
+  // One session refusing (still running, a workspace conflict) must not
+  // strand the ones already resumed without a supervisor.
+  const refused = [];
   for (const id of targets) {
     const refusal = plans.resumeSession(id, message);
-    if (refusal) die(7, refusal);
+    if (refusal) {
+      refused.push(id);
+      process.stderr.write(`zcode-agent: ${id}: ${refusal}\n`);
+    }
   }
+  const waiting = [...statuses.values()].some((x) => x.status === 'pending' || x.status === 'skipped');
+  if (targets.length && refused.length === targets.length && !waiting) process.exit(7);
   // Launch failures recorded earlier are retried by the supervisor.
   if (state.launchErrors && Object.keys(state.launchErrors).length) {
     store.updatePlanState(name, { launchErrors: {} });

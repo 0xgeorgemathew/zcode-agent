@@ -80,12 +80,20 @@ module.exports = async function doctor(parsed) {
   const { enginePath, builtinConfig, nodeBin } = runtime;
   const root = rootDir(process.env);
   const live = liveDir(process.env);
+  const hermetic = Boolean(flags.hermetic) || process.env.ZCODE_HERMETIC === '1';
   const built = buildEngineHome({
     home: path.join(root, 'doctor', 'home'),
     root,
     key: runtime.key,
     live,
-    hermetic: process.env.ZCODE_HERMETIC === '1',
+    // The setup a run with the same flags would get.
+    hermetic,
+    browser: !flags.noBrowser,
+    mcpSpecs: flags.mcpSpecs,
+    skillsDirs: flags.skillsDirs,
+    noSkills: flags.noSkills,
+    inheritDesktop: flags.inheritDesktop || process.env.ZCODE_INHERIT_DESKTOP === '1',
+    builtinConfig,
   });
   const version = engineVersion(nodeBin, enginePath, engineEnv({ home: built.home, builtinProviderConfig: builtinConfig }));
   const tested = testedEngineVersion();
@@ -109,6 +117,10 @@ module.exports = async function doctor(parsed) {
   if (tested && version && version !== tested) warnings.push(`engine ${version} differs from the tested ${tested}`);
   if (defaultBrowser && !chromium) warnings.push('no Playwright Chromium found for the default browser server: run zcode-agent doctor --install-browser');
   if (browserInstalled === false) warnings.push('browser install failed (see the output above)');
+  if (built.skillsSkipped.length) warnings.push(`skills that could not be copied and are left out: ${built.skillsSkipped.join(', ')}`);
+  // Left out of the inherited set, by cause.
+  const skippedUnhealthy = built.mcp.skippedUnhealthy;
+  const skippedOAuth = hermetic ? [] : liveSet.filter((n) => !servers.includes(n) && !skippedUnhealthy.includes(n));
 
   const report = {
     ok: nodeOk(nodeVersion) && browserInstalled !== false,
@@ -134,9 +146,10 @@ module.exports = async function doctor(parsed) {
       home: built.home,
       sessionsDir: store.sessionsDir(process.env),
       mode: built.mode,
-      hermetic: process.env.ZCODE_HERMETIC === '1',
+      hermetic,
       mcpServers: servers,
-      mcpSkippedOAuth: liveSet.filter((n) => !servers.includes(n)),
+      mcpSkippedOAuth: skippedOAuth,
+      mcpSkippedUnhealthy: skippedUnhealthy,
       skillsInherited: built.skillsCopied,
     },
     browser: {
@@ -166,8 +179,8 @@ module.exports = async function doctor(parsed) {
         `  api key from ${KEY_SOURCES[runtime.keySource] || runtime.keySource} (never printed)`,
         `  models ${Object.entries(report.models).map(([id, l]) => `${id} (effort ${l.join('|')}, ${report.vision[id] ? 'images' : 'no images'})`).join(', ')}`,
         report.desktop.found ? `  ZCode app settings ${live}` : '  ZCode app not found: standalone mode',
-        `  mcp servers ${servers.length ? servers.join(', ') : 'none'}${iso.mcpSkippedOAuth.length ? ` (skipped, OAuth: ${iso.mcpSkippedOAuth.join(', ')})` : ''}`,
-        `  skills inherited ${iso.skillsInherited}${iso.hermetic ? ' (ZCODE_HERMETIC=1)' : ''}`,
+        `  mcp servers ${servers.length ? servers.join(', ') : 'none'}${iso.mcpSkippedOAuth.length ? ` (skipped, OAuth: ${iso.mcpSkippedOAuth.join(', ')})` : ''}${skippedUnhealthy.length ? ` (skipped, failed recently: ${skippedUnhealthy.join(', ')})` : ''}`,
+        `  skills inherited ${iso.skillsInherited}${iso.hermetic ? ' (hermetic)' : ''}`,
         `  browser ${report.browser.server}; Playwright Chromium ${chromium ? 'found' : 'missing'}`,
         `  state ${root} (one engine HOME per session)`,
         `  sessions ${report.sessions.total} (${report.sessions.running} running, ${report.sessions.interrupted} interrupted)`,

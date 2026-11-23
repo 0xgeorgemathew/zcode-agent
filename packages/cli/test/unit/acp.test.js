@@ -23,7 +23,7 @@ test('config options: mode, model and the efforts the model accepts', () => {
     ['effort', 'thought_level', 'select', 'max'],
   ]);
   assert.deepEqual(opts[0].options.map((o) => o.value), ['build', 'edit', 'plan', 'yolo']);
-  assert.deepEqual(opts[1].options.map((o) => o.value), ['GLM-5.3', 'GLM-5.3-Flash']);
+  assert.deepEqual(opts[1].options.map((o) => o.value), ['GLM-5.4', 'GLM-5.3', 'GLM-5.3-Flash']);
   assert.deepEqual(opts[2].options.map((o) => o.value), ['low', 'high', 'max']);
   assert.equal(map.effortFor('GLM-5.3', 'medium', { builtinConfig: '/nonexistent' }), 'max', 'an unsupported effort falls back to the highest');
   assert.equal(map.effortFor('GLM-5.3', 'low', { builtinConfig: '/nonexistent' }), 'low');
@@ -34,14 +34,21 @@ test('prompt blocks become one engine prompt; images are saved and named', () =>
   const text = map.promptText([
     { type: 'text', text: 'Fix the bug.' },
     { type: 'resource_link', uri: 'file:///repo/src/a%20b.js', name: 'a b.js' },
+    { type: 'resource_link', uri: 'https://example.test/spec.md', name: 'spec.md' },
     { type: 'resource', resource: { uri: 'file:///repo/x.txt', text: 'hello' } },
     { type: 'image', data: Buffer.from('png').toString('base64'), mimeType: 'image/png' },
-  ], { saveImage: (block, i) => { saved.push(block.mimeType); return `/tmp/img-${i}.png`; }, model: 'GLM-5.3-Flash', env: { ZAI_CODE_BUILTIN_PROVIDER_CONFIG: '/nonexistent' } });
+  ], { saveImage: (block, i) => { saved.push(block.mimeType); return `/tmp/img-${i}.png`; }, model: 'GLM-5.3-Flash', builtinConfig: '/nonexistent' });
   assert.deepEqual(saved, ['image/png']);
   assert.match(text, /^Fix the bug\./);
   assert.match(text, /Referenced: \/repo\/src\/a b\.js/);
+  assert.match(text, /Referenced: https:\/\/example\.test\/spec\.md/, 'a non-file link keeps its URI');
   assert.match(text, /<file path="\/repo\/x\.txt">\nhello\n<\/file>/);
   assert.match(text, /Attached image: \/tmp\/img-0\.png \(open it with the Read tool\)/);
+  // The note follows the model: GLM-5.4 reads the image, GLM-5.3 is told who can.
+  const image = [{ type: 'image', data: 'AAAA', mimeType: 'image/png' }];
+  const note = (model) => map.promptText(image, { saveImage: () => '/tmp/i.png', model, builtinConfig: '/nonexistent' });
+  assert.match(note('GLM-5.4'), /open it with the Read tool/);
+  assert.match(note('GLM-5.3'), /GLM-5\.3 cannot see images; switch to GLM-5\.4 or GLM-5\.3-Flash/);
 });
 
 test('ACP mcpServers become engine MCP specs', () => {
@@ -198,7 +205,7 @@ test('acp: initialize advertises load, list, close, images and HTTP/SSE MCP', as
     const init = await a.ok('initialize', { protocolVersion: 1, clientCapabilities: {} });
     assert.equal(init.protocolVersion, 1);
     assert.equal(init.agentCapabilities.loadSession, true);
-    assert.deepEqual(init.agentCapabilities.sessionCapabilities, { list: {}, close: {} });
+    assert.deepEqual(init.agentCapabilities.sessionCapabilities, { list: {}, close: {}, resume: {} });
     assert.equal(init.agentCapabilities.promptCapabilities.image, true);
     assert.deepEqual(init.agentCapabilities.mcpCapabilities, { http: true, sse: true });
     assert.equal(init.agentInfo.name, 'zcode-agent');
@@ -220,7 +227,7 @@ test('acp: session/new is free — a probe that never prompts leaves no session 
     assert.match(s.sessionId, /^zc-[0-9a-f]{8}$/);
     assert.deepEqual(s.modes.availableModes.map((m) => m.id), ['build', 'edit', 'plan', 'yolo']);
     assert.equal(s.modes.currentModeId, 'build');
-    assert.deepEqual(s.configOptions.map((o) => o.currentValue), ['build', 'GLM-5.3', 'high']);
+    assert.deepEqual(s.configOptions.map((o) => o.currentValue), ['build', 'GLM-5.4', 'high']);
     const rel = await a.call('session/new', { cwd: 'relative/dir', mcpServers: [] });
     assert.equal(rel.error.code, -32602);
     await a.close();
@@ -282,7 +289,7 @@ test('acp: a prompt streams text, tools, plan, title and usage, and is a zcode-a
     assert.equal(mine[7].update.content.text, 'done');
     const usage = mine[8].update;
     assert.equal(usage.used, 5020);
-    assert.equal(usage.size, 1000000, 'GLM-5.3 context window');
+    assert.equal(usage.size, 1000000, 'GLM-5.4 context window');
     assert.equal(usage.cost.currency, 'USD');
 
     const record = JSON.parse(fs.readFileSync(path.join(fake.root, 'sessions', sessionId, 'session.json'), 'utf8'));
@@ -294,7 +301,7 @@ test('acp: a prompt streams text, tools, plan, title and usage, and is a zcode-a
     assert.deepEqual(sent.filter((l) => l.method === 'session/setMode').map((l) => l.params.mode), [], 'created in build already');
     const send = sent.find((l) => l.method === 'session/send');
     assert.equal(send.params.content, 'make hello.txt');
-    assert.deepEqual([send.params.modelSelection.modelId, send.params.modelSelection.options.reasoningLevel], ['GLM-5.3', 'high'], 'GLM-5.3 at high by default');
+    assert.deepEqual([send.params.modelSelection.modelId, send.params.modelSelection.options.reasoningLevel], ['GLM-5.4', 'high'], 'GLM-5.4 at high by default');
     const home = fake.log().find((l) => l.turnStarted).home;
     assert.match(fs.readFileSync(path.join(home, '.zcode', 'AGENTS.md'), 'utf8'), /Agent Client Protocol/, 'the interactive instructions, not the executor\'s');
 
@@ -341,6 +348,33 @@ test('acp: engine permission requests are asked of the client and its choice rea
   }
 });
 
+test('acp: engine stops map to ACP stop reasons by result type; other non-success results stay errors', async () => {
+  const fake = setupFake({
+    turns: [
+      { response: 'a', resultType: 'cancelled' },
+      { response: 'b', resultType: 'error_max_turns' },
+      { response: 'c', resultType: 'error_max_budget' },
+    ],
+  });
+  try {
+    const a = startAgent();
+    await a.ok('initialize', { protocolVersion: 1 });
+    const { sessionId } = await a.ok('session/new', { cwd: fake.work, mcpServers: [] });
+    const prompt = (text) => a.call('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+    assert.equal((await prompt('one')).result.stopReason, 'cancelled');
+    assert.equal((await prompt('two')).result.stopReason, 'max_turn_requests');
+    const budget = await prompt('three');
+    assert.equal(budget.result, undefined);
+    assert.match(budget.error.message, /error_max_budget/);
+    // A non-success turn's usage still counts: three turns, three requests' worth of tokens.
+    const rec = JSON.parse(fs.readFileSync(path.join(fake.root, 'sessions', sessionId, 'session.json'), 'utf8'));
+    assert.equal(rec.usageTotal.inputTokens, 300);
+    await a.close();
+  } finally {
+    fake.cleanup();
+  }
+});
+
 test('acp: plan approval (ExitPlanMode) is a switch_mode permission', async () => {
   const fake = setupFake({ turns: [{ response: 'planned', planApproval: { toolCallId: 'p1', toolName: 'ExitPlanMode', input: { plan: 'Step 1' } } }] });
   try {
@@ -381,7 +415,7 @@ test('acp: mode, model and effort switch per session; the engine follows', async
     const log = fake.log().filter((l) => l.method);
     assert.deepEqual(log.filter((l) => l.method === 'session/setMode').map((l) => l.params.mode), ['yolo', 'edit']);
     const sends = log.filter((l) => l.method === 'session/send');
-    assert.deepEqual(sends.map((l) => [l.params.modelSelection.modelId, l.params.modelSelection.options.reasoningLevel]), [['GLM-5.3', 'high'], ['GLM-5.3-Flash', 'low']]);
+    assert.deepEqual(sends.map((l) => [l.params.modelSelection.modelId, l.params.modelSelection.options.reasoningLevel]), [['GLM-5.4', 'high'], ['GLM-5.3-Flash', 'low']]);
     const record = JSON.parse(fs.readFileSync(path.join(fake.root, 'sessions', sessionId, 'session.json'), 'utf8'));
     assert.deepEqual([record.model, record.effort, record.acp.mode], ['GLM-5.3-Flash', 'low', 'edit']);
     await a.close();
@@ -596,4 +630,149 @@ test('acp: rejects flags that do not apply and stray arguments', () => {
   assert.equal(run(['acp', 'hello']).status, 2);
   assert.match(run(['acp', '--mode', 'auto']).stderr, /--mode accepts build \| edit \| plan \| yolo/);
   assert.match(run(['task', '--mode', 'yolo', 'x']).stderr, /--mode is only valid with "zcode-agent acp"/);
+});
+
+// --- 1.4 ------------------------------------------------------------------------------
+
+test('a finished edit keeps its diff: the result update carries diff and result text', () => {
+  const m = new map.TurnMapper({ engineSessionId: 's', cwd: '/repo' });
+  const ev = (type, payload) => m.feed({ method: 'session/event', params: { sessionId: 's', type, payload } });
+  ev('model.streaming', { kind: 'tool_call', toolCallId: 't1', toolName: 'Edit', input: { file_path: '/repo/a.js', old_string: 'a', new_string: 'b' } });
+  const [done] = ev('tool.updated', { kind: 'result', toolCallId: 't1', toolName: 'Edit', result: { success: true, content: 'updated' } });
+  assert.deepEqual(done.content.map((c) => c.type), ['diff', 'content']);
+  ev('model.streaming', { kind: 'tool_call', toolCallId: 't2', toolName: 'Edit', input: { file_path: '/repo/a.js', old_string: 'x', new_string: 'y' } });
+  const [failed] = ev('tool.updated', { kind: 'result', toolCallId: 't2', toolName: 'Edit', result: { success: false, content: 'no match' } });
+  assert.deepEqual(failed.content.map((c) => c.type), ['content'], 'an edit that did not apply shows no diff');
+});
+
+test('the model picker lists every model, none labelled as the default', () => {
+  const picker = map.configOptions({ mode: 'build', model: 'GLM-5.4', effort: 'high' }, { builtinConfig: '/nonexistent' })[1];
+  assert.deepEqual(picker.options.map((o) => o.value), ['GLM-5.4', 'GLM-5.3', 'GLM-5.3-Flash']);
+  assert.ok(picker.options.every((o) => o.description && !/default/i.test(o.description)));
+});
+
+test('acp: session/resume reopens a session without replaying it; closing an unknown session succeeds', async () => {
+  const fake = setupFake({ turns: [{ response: 'hello' }, { response: 'again' }], messages: [{ info: { role: 'user' }, parts: [{ type: 'text', text: 'hi' }] }] });
+  try {
+    const a = startAgent();
+    await a.ok('initialize', { protocolVersion: 1 });
+    const { sessionId } = await a.ok('session/new', { cwd: fake.work, mcpServers: [] });
+    await a.ok('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'hi' }] });
+    await a.close();
+
+    const b = startAgent();
+    await b.ok('initialize', { protocolVersion: 1 });
+    const resumed = await b.ok('session/resume', { sessionId, cwd: fake.work, mcpServers: [] });
+    assert.ok(resumed.configOptions && resumed.modes, 'the same shape as session/load');
+    const kinds = b.updates.map((u) => u.update.sessionUpdate);
+    assert.ok(!kinds.includes('user_message_chunk') && !kinds.includes('agent_message_chunk'), `no history replay: ${kinds}`);
+    assert.ok(!fake.log().some((l) => l.method === 'session/messages'));
+    assert.equal(fake.log().filter((l) => l.method === 'session/resume').length, 1, 'the engine session was resumed, not created');
+    assert.equal((await b.ok('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'more' }] })).stopReason, 'end_turn');
+    assert.deepEqual(await b.ok('session/close', { sessionId: 'zc-00000000' }), {});
+    await b.close();
+  } finally {
+    fake.cleanup();
+  }
+});
+
+test('acp: a mode change while the engine is still starting reaches the engine', async () => {
+  const fake = setupFake({ turns: [{ response: 'x' }], createDelayMs: 600 });
+  try {
+    const a = startAgent(['--mode', 'yolo'], { env: { ZCODE_ACP_PREWARM_MS: '0' } });
+    await a.ok('initialize', { protocolVersion: 1 });
+    const { sessionId } = await a.ok('session/new', { cwd: fake.work, mcpServers: [] });
+    await until(() => fake.log().some((l) => l.method === 'session/create'));
+    await a.ok('session/set_config_option', { sessionId, configId: 'mode', value: 'build' });
+    const modes = fake.log().filter((l) => l.method === 'session/setMode').map((l) => l.params.mode);
+    assert.equal(modes[modes.length - 1], 'build', `the engine ends in build, not yolo: ${modes}`);
+    await a.close();
+  } finally {
+    fake.cleanup();
+  }
+});
+
+test('acp: a load refused because another agent has the session open leaves its record alone', async () => {
+  const fake = setupFake({ turns: [{ response: 'one' }, { hang: true }] });
+  try {
+    const a = startAgent();
+    await a.ok('initialize', { protocolVersion: 1 });
+    const { sessionId } = await a.ok('session/new', { cwd: fake.work, mcpServers: [] });
+    await a.ok('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'hi' }] });
+    a.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'long' }] });
+    await until(() => fake.log().filter((l) => l.turnStarted).length === 2);
+    const record = () => JSON.parse(fs.readFileSync(path.join(fake.root, 'sessions', sessionId, 'session.json'), 'utf8'));
+    assert.equal(record().state, 'running');
+
+    const b = startAgent();
+    await b.ok('initialize', { protocolVersion: 1 });
+    const refused = await b.call('session/load', { sessionId, cwd: fake.work, mcpServers: [] });
+    assert.match(refused.error.message, /open in another zcode-agent process/);
+    assert.equal(record().state, 'running', 'the running session is not marked finished');
+    assert.equal(record().closedReason || null, null);
+    await b.close();
+    await a.close();
+  } finally {
+    fake.cleanup();
+  }
+});
+
+test('acp: an empty prompt ends the turn without starting an engine or a session record', async () => {
+  const fake = setupFake();
+  try {
+    const a = startAgent([], { env: { ZCODE_ACP_PREWARM_MS: 'off' } });
+    await a.ok('initialize', { protocolVersion: 1 });
+    const { sessionId } = await a.ok('session/new', { cwd: fake.work, mcpServers: [] });
+    assert.equal((await a.ok('session/prompt', { sessionId, prompt: [] })).stopReason, 'end_turn');
+    assert.equal((await a.ok('session/prompt', { sessionId, prompt: [{ type: 'text', text: '  ' }] })).stopReason, 'end_turn');
+    assert.deepEqual(fake.log(), [], 'no engine was started');
+    assert.ok(!fs.existsSync(path.join(fake.root, 'sessions', sessionId, 'session.json')));
+    await a.close();
+  } finally {
+    fake.cleanup();
+  }
+});
+
+test('acp: --timeout-ms stops the prompt with a message and stopReason cancelled, not an error', async () => {
+  const fake = setupFake({ turns: [{ hang: true }] });
+  try {
+    const a = startAgent(['--timeout-ms', '600']);
+    await a.ok('initialize', { protocolVersion: 1 });
+    const { sessionId } = await a.ok('session/new', { cwd: fake.work, mcpServers: [] });
+    const res = await a.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'x' }] });
+    assert.equal(res.error, undefined);
+    assert.equal(res.result.stopReason, 'cancelled');
+    assert.ok(a.updates.some((u) => u.update.sessionUpdate === 'agent_message_chunk' && /time limit/.test(u.update.content.text)));
+    assert.ok(fake.log().some((l) => l.method === 'session/stop'));
+    // The stopped turn's model request is still counted.
+    const rec = JSON.parse(fs.readFileSync(path.join(fake.root, 'sessions', sessionId, 'session.json'), 'utf8'));
+    assert.equal(rec.usageTotal.modelRequests, 1);
+    await a.close();
+  } finally {
+    fake.cleanup();
+  }
+});
+
+test('acp: a client that closes stdin mid-prompt still gets the prompt\'s reply', async () => {
+  const fake = setupFake({ turns: [{ hang: true }] });
+  try {
+    const a = startAgent();
+    await a.ok('initialize', { protocolVersion: 1 });
+    const { sessionId } = await a.ok('session/new', { cwd: fake.work, mcpServers: [] });
+    const pending = a.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'x' }] });
+    await until(() => fake.log().some((l) => l.turnStarted));
+    const started = Date.now();
+    const exit = a.close();
+    assert.equal((await pending).result.stopReason, 'cancelled');
+    assert.equal(await exit, 0);
+    assert.ok(Date.now() - started < 4000, 'bounded');
+  } finally {
+    fake.cleanup();
+  }
+});
+
+test('acp: an effort the default model does not accept is a usage error, not silently replaced', () => {
+  const res = spawnSync(process.execPath, [BIN, 'acp', '--effort', 'medium'], { encoding: 'utf8', input: '' });
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /--effort medium is not supported by GLM-5\.4/);
 });

@@ -66,7 +66,7 @@ test('plan check: cycles, unknown after, duplicate ids, concurrent owns overlap,
     .some((p) => /"b" and "c" can run concurrently/.test(p)));
 
   const effort = problemsOf({ effort: 'medium', sessions: [sess('a'), sess('b', { effort: 'xhigh' })] });
-  assert.equal(effort.filter((p) => /not supported by GLM-5\.3 \(supported: low, high, max\)/.test(p)).length, 2, effort.join('\n'));
+  assert.equal(effort.filter((p) => /not supported by GLM-5\.4 \(supported: low, high, max\)/.test(p)).length, 2, effort.join('\n'));
   assert.ok(problemsOf({ sessions: [sess('a', { model: 'gpt-4' })] }).some((p) => /unknown model/.test(p)));
   assert.ok(problemsOf({ sessions: [sess('a', { bogus: 1 })] }).some((p) => /session "a": unknown task contract key/.test(p)));
   assert.ok(problemsOf({ sessions: [sess('a', { decisions: ['@missing.md'] })] }).some((p) => /could not be read/.test(p)));
@@ -311,4 +311,38 @@ test('plan resume: failed sessions resume, their skipped downstream launches onc
   const nothing = await run(['plan', 'resume', 'res', '--json']);
   assert.equal(nothing.code, 0);
   assert.equal(lines(nothing.stdout)[0].status, 'completed');
+});
+
+test('plan resume --detach on a running plan keeps its supervisor; the plan never reads interrupted', async () => {
+  fake.setScript({ turns: [{ delayMs: 2500, response: done() }, { response: done() }] });
+  const file = writePlan({ sessions: [sess('a'), sess('b', { after: ['a'] })] });
+  assert.equal((await run(['plan', 'run', file, '--detach', '--json'])).code, 0);
+  await until(() => plans.supervisorAlive(store.readPlanState('plan')));
+  const supervisor = store.readPlanState('plan').supervisor.pid;
+  assert.equal((await run(['plan', 'resume', 'plan', '--detach', '--json'])).code, 0);
+  assert.equal(store.readPlanState('plan').supervisor.pid, supervisor, 'no second supervisor replaced the live one');
+  const seen = new Set();
+  await until(() => {
+    const status = lines((require('node:child_process').spawnSync(process.execPath, [path.join(__dirname, '..', '..', 'bin', 'zcode-agent.js'), 'plan', 'status', 'plan', '--json'], { encoding: 'utf8', cwd: fake.work })).stdout)[0].status;
+    seen.add(status);
+    return status !== 'running';
+  }, 30000);
+  assert.deepEqual([...seen].sort(), ['completed', 'running']);
+});
+
+test('a plan file caught mid-save does not end the supervisor or plan wait', async () => {
+  fake.setScript({ turns: [{ delayMs: 2000, response: done() }, { response: done() }] });
+  // Outside the workspace: rewriting it mid-run must not read as session a's change.
+  const plan = { cwd: fake.work, sessions: [sess('a'), sess('b', { after: ['a'] })] };
+  const file = path.join(fake.base, 'plan.json');
+  fs.writeFileSync(file, JSON.stringify(plan));
+  assert.equal((await run(['plan', 'run', file, '--detach', '--json'])).code, 0);
+  const waiting = run(['plan', 'wait', 'plan', '--json']);
+  await until(() => store.readSession('a'));
+  fs.writeFileSync(file, '{"sessions": [');
+  await sleep(1200);
+  fs.writeFileSync(file, JSON.stringify(plan));
+  const res = await waiting;
+  assert.equal(res.code, 0, res.stderr);
+  assert.equal(lines(res.stdout).pop().status, 'completed');
 });

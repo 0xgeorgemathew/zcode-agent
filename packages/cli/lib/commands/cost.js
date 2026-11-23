@@ -21,12 +21,16 @@ function table(entries, title) {
       c ? cost.formatTokens(c.input) : '-',
       c ? cost.formatTokens(c.cached) : '-',
       c ? cost.formatTokens(c.output) : '-',
-      c ? `${cost.formatUsd(c.usd)}${c.estimate ? '~' : ''}` : '-',
+      c ? money(c) : '-',
     ];
   });
   const widths = head.map((h, i) => Math.max(String(h).length, ...rows.map((r) => String(r[i]).length)));
   return [row(head, widths), ...rows.map((r) => row(r, widths))].join('\n');
 }
+
+// `$1.23`, `~` for an estimate, `+?` when usage of a model with no known
+// price is not in the amount.
+const money = (c) => `${cost.formatUsd(c.usd)}${c.estimate ? '~' : ''}${c.unpriced && c.unpriced.length ? '+?' : ''}`;
 
 module.exports = async function costCommand(parsed) {
   const { flags, prompts } = parsed;
@@ -34,7 +38,7 @@ module.exports = async function costCommand(parsed) {
     process.stderr.write('zcode-agent: cost takes at most one directory.\n');
     process.exit(2);
   }
-  const dir = path.resolve(prompts[0] || flags.cwd || process.cwd());
+  const dir = path.resolve(prompts[0] || flags.cwd);
   const sessions = cost.dirSessions(dir);
   const app = flags.app ? cost.appSessions(dir) : null;
   const zTotal = cost.sumCosts(sessions.map((s) => s.cost));
@@ -60,8 +64,9 @@ module.exports = async function costCommand(parsed) {
     '',
     `total  ${n} session${n === 1 ? '' : 's'}  ${total.requests} requests  ` +
       `${cost.formatTokens(total.input)} input (${cost.formatTokens(total.cached)} cached)  ` +
-      `${cost.formatTokens(total.output)} output  ${cost.formatUsd(total.usd)}${total.estimate ? '~' : ''}`,
-    `Z.ai API list price${total.estimate ? '; ~ = no cache split, priced as uncached input' : ''}; ZCODE_PRICES overrides`
+      `${cost.formatTokens(total.output)} output  ${money(total)}`,
+    `Z.ai API list price${total.estimate ? '; ~ = estimate (no cache split, or a provisional price)' : ''}` +
+      `${total.unpriced ? `; +? = not counted, no price for ${total.unpriced.join(', ')}` : ''}; ZCODE_PRICES overrides`
   );
   process.stdout.write(lines.join('\n') + '\n');
 };

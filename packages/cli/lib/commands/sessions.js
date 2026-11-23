@@ -24,6 +24,19 @@ function resolveOrExit(ref, json) {
 function finalResult(view) {
   const result = store.readResult(view.id);
   if (view.state === 'finished' && result) return result;
+  // An ACP session writes no handback: between prompts (and once closed) its
+  // record says finished/completed, and it continues in the ACP client, not
+  // with `resume`.
+  if (view.kind === 'acp' && view.state === 'finished') {
+    return { type: 'result', ok: true, status: 'completed', id: view.id, kind: 'acp', issues: [], durationMs: 0 };
+  }
+  if (view.kind === 'acp') {
+    return {
+      type: 'result', ok: false, status: 'failed', id: view.id, kind: 'acp',
+      error: { kind: 'interrupted', message: 'the ACP agent running this session exited mid-prompt; reopen the session in the ACP client' },
+      issues: ['interrupted before completion'], durationMs: 0,
+    };
+  }
   return {
     type: 'result',
     ok: false,
@@ -52,7 +65,7 @@ async function status(parsed) {
   if (prompts.length === 0) {
     const everything = store.listSessions();
     if (flags.json) {
-      process.stdout.write(JSON.stringify({ type: 'sessions', sessions: everything.slice(0, 50).map(summaryOf) }) + '\n');
+      process.stdout.write(JSON.stringify({ type: 'sessions', sessions: (flags.all ? everything : everything.slice(0, 50)).map(summaryOf) }) + '\n');
     } else if (everything.length === 0) {
       process.stdout.write('no sessions\n');
     } else {
@@ -238,7 +251,7 @@ async function cancel(parsed) {
 // <age> ago[  thinking|writing <age> <n> chars]  req <n>  sub <running>
 // $cost` (+ STALLED? when running and silent). `usd`: the session's cost so
 // far (lib/cost.js), null if unknown.
-function watchLine(view, { stallMin, now = Date.now(), usd = null }) {
+function watchLine(view, { stallMin, now = Date.now(), usd = null, estimate = false }) {
   const done = isDone(view);
   const state = view.state === 'finished' ? view.status || 'finished' : view.state;
   const a = view.activity || {};
@@ -254,7 +267,7 @@ function watchLine(view, { stallMin, now = Date.now(), usd = null }) {
     ? `  ${cur.doing} ${formatElapsed(now - Date.parse(cur.since))}${cur.chars ? ` ${cost.formatTokens(cur.chars)} chars` : ''}`
     : '';
   const stalled = idle && idle.stalled ? '  STALLED?' : '';
-  const money = usd === null || usd === undefined ? '' : `  ${cost.formatUsd(usd)}`;
+  const money = usd === null || usd === undefined ? '' : `  ${cost.formatUsd(usd)}${estimate ? '~' : ''}`;
   const text = `${view.id}  ${state}${phase}  ${elapsed}  ${last}${doing}  req ${a.modelRequests || 0}  sub ${a.subagentsRunning || 0}${money}${stalled}`;
   // The change signature leaves out the clocks (elapsed, ages, char counts).
   const sig = [view.id, state, phase, a.lastTool, cur ? cur.doing : '', a.modelRequests || 0, a.subagentsRunning || 0, money, Boolean(stalled)].join('|');
@@ -279,7 +292,13 @@ async function watch(parsed) {
       process.stderr.write(`zcode-agent: no plan "${flags.plan}" (zcode-agent plan run <file> starts one).\n`);
       process.exit(2);
     }
-    planCtx = { plans, state, r: plans.resolvePlan(state.file, state.cwd) };
+    try {
+      planCtx = { plans, state, r: plans.resolvePlan(state.file, state.cwd) };
+    } catch (err) {
+      if (!(err instanceof plans.PlanError)) throw err;
+      process.stderr.write(`zcode-agent: ${err.message}\n`);
+      process.exit(2);
+    }
   }
   const ids = prompts.map((p) => resolveOrExit(p, false));
   const pick = () => {
@@ -301,9 +320,11 @@ async function watch(parsed) {
       process.exit(0);
     }
     const costs = views.map((v) => cost.sessionCost(v));
-    const lines = views.map((v, i) => watchLine(v, { stallMin, usd: costs[i] ? costs[i].usd : null }));
+    const lines = views.map((v, i) => watchLine(v, { stallMin, usd: costs[i] ? costs[i].usd : null, estimate: Boolean(costs[i] && costs[i].estimate) }));
     const known = costs.filter(Boolean);
-    const total = lines.length > 1 && known.length ? `total  ${cost.formatUsd(cost.sumCosts(known).usd)}  (${known.length} session${known.length === 1 ? '' : 's'}, Z.ai list price)` : null;
+    const sum = cost.sumCosts(known);
+    // ~ as in `zcode-agent cost`: an estimate (no cache split, or a provisional price).
+    const total = lines.length > 1 && known.length ? `total  ${cost.formatUsd(sum.usd)}${sum.estimate ? '~' : ''}  (${known.length} session${known.length === 1 ? '' : 's'}, Z.ai list price${sum.estimate ? '; ~ = estimate' : ''})` : null;
     if (tty) {
       const shown = total ? [...lines.map((l) => l.text), total] : lines.map((l) => l.text);
       process.stdout.write(`${drawn ? `\x1b[${drawn}F\x1b[J` : ''}${shown.join('\n')}${shown.length ? '\n' : ''}`);

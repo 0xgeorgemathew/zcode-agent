@@ -67,6 +67,16 @@ function loadTaskBase(spec) {
   return { base: { objective: trimmed }, dir };
 }
 
+// Node fires a timer set beyond 2^31-1 ms at once, so a larger --timeout-ms
+// (or contract limit) would time the run out immediately.
+const MAX_TIMER_MS = 2147483647;
+function clampTimers(inv) {
+  for (const k of ['timeoutMs', 'checkTimeoutMs']) {
+    if (typeof inv[k] === 'number' && inv[k] > MAX_TIMER_MS) inv[k] = MAX_TIMER_MS;
+  }
+  return inv;
+}
+
 // `spec` ({base, dir}) replaces --task: the plan supervisor hands over an
 // assembled contract instead of a file.
 function buildInvocation(parsed, spec) {
@@ -167,7 +177,7 @@ function buildInvocation(parsed, spec) {
     if (err instanceof OwnershipError) usage(err.message);
     throw err;
   }
-  return inv;
+  return clampTimers(inv);
 }
 
 // resume <id> [message] — or run --session <id> <prompt> (0.3 compat).
@@ -182,19 +192,19 @@ function buildResume(parsed, ref, message) {
   const effort = given.has('effort') ? flags.effort : settings.effort;
   const problem = effortProblem(model, effort);
   if (problem) usage(problem);
-  return {
+  return clampTimers({
     ...settings,
     id,
     resume: { message },
-    model: given.has('model') ? flags.model : settings.model,
-    effort: given.has('effort') ? flags.effort : settings.effort,
+    model,
+    effort,
     timeoutMs: given.has('timeoutMs') ? flags.timeoutMs : settings.timeoutMs,
     maxRepairs: given.has('maxRepairs') ? flags.maxRepairs : settings.maxRepairs,
     checkTimeoutMs: given.has('checkTimeoutMs') ? flags.checkTimeoutMs : settings.checkTimeoutMs,
     includeReasoning: flags.includeReasoning,
     stream: settings.kind !== 'task' || flags.stream,
     contract: settings.kind === 'task' ? readTask(id) : undefined,
-  };
+  });
 }
 
 function readTask(id) {
@@ -212,6 +222,11 @@ function readTask(id) {
 // session is still running.
 function startDetached(inv) {
   if (inv.resume) {
+    // The worker starts in the session's directory: without it the spawn
+    // fails silently and the session would read "interrupted".
+    if (!fs.existsSync(inv.cwd)) {
+      throw new ExecError(`the workspace of session "${inv.id}" no longer exists: ${inv.cwd}`, { exitCode: 2, kind: 'not_found' });
+    }
     const view = store.viewSession(store.readSession(inv.id));
     if (view && view.live) {
       throw new ExecError(`session "${inv.id}" is still running (pid ${view.pid}).`, { exitCode: 7, kind: 'busy' });
@@ -324,7 +339,7 @@ async function exec(parsed) {
         reporter.onEvent(ev);
       };
 
-  // SIGINT/SIGTERM (Ctrl-C, `zcode cancel`) abort cleanly: the engine is
+  // SIGINT/SIGTERM/SIGHUP (Ctrl-C, `zcode-agent cancel`, a closed terminal) abort cleanly: the engine is
   // told to stop, checks are killed, the session is recorded "cancelled".
   // A second signal exits immediately.
   const controller = new AbortController();
@@ -336,6 +351,8 @@ async function exec(parsed) {
   };
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
+  // A closed terminal must stop the engine too, not leave it running tools.
+  process.on('SIGHUP', onSignal);
 
   let result;
   try {
@@ -344,12 +361,15 @@ async function exec(parsed) {
     if (err instanceof ConfigError || err instanceof ExecError) {
       const failed = {
         type: 'result', ok: false, status: 'failed', id: inv.id, kind,
-        error: { kind: err.kind || 'config', message: err.message }, issues: [err.message],
+        // exitCode: `wait` on a detached run that never started exits as the
+        // run itself would have (3 no key, 2 not found), not 5.
+        error: { kind: err.kind || 'config', message: err.message, exitCode: err.exitCode }, issues: [err.message],
       };
       if (json) process.stdout.write(JSON.stringify(full ? failed : buildBrief(failed)) + '\n');
       // A detached worker's caller polls the store: record why it never ran
-      // (conflicts already record themselves).
-      if (worker && err.kind !== 'conflict' && store.readSession(inv.id)) {
+      // (conflicts already record themselves; busy means another process is
+      // driving the session and owns its record).
+      if (worker && err.kind !== 'conflict' && err.kind !== 'busy' && store.readSession(inv.id)) {
         store.writeResult(inv.id, failed);
         store.updateSession(inv.id, { state: 'finished', phase: 'done', status: 'failed', outcome: { status: 'failed', issues: [err.message] } });
       }

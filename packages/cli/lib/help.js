@@ -8,17 +8,17 @@ const SESSION = `  --id <id>        name the session (existing id is never re-ru
   --cwd <dir>      workspace (default: current dir)
   --owns <path>    repeatable: paths this session may change (default: whole workspace)
   --allow-overlap  start despite overlapping ownership`;
-const EXEC = `  --model <id>     glm-5.3 | glm-5.3-flash (default glm-5.3)
+const EXEC = `  --model <id>     glm-5.4 | glm-5.3 | glm-5.3-flash (default glm-5.4)
   --effort <lvl>   low | high | max (default high)
-  --mcp <json|@f>  add MCP servers (repeatable)   --mcp-inherit   --no-browser
+  --mcp <json|@f>  add MCP servers (repeatable)   --hermetic   --no-browser
   --skills <dir>   add skills (repeatable)        --no-skills
-  --inherit-desktop  give the executor the desktop's AGENTS.md, skills, plugins
+  --inherit-desktop  give the executor the desktop's AGENTS.md, plugins and agent profiles
   --json           NDJSON events; last line is the compact brief (--full: whole record)
   --quiet          no progress feed; with --json only the result line`;
 
 const HELP = {
   task: `usage: zcode-agent task [options] <objective...>
-Execute a task contract, verify it with zcode-run checks, hand back.
+Execute a task contract, verify it with checks zcode-agent runs itself, hand back.
 
 contract:
   --task <file|->       JSON contract or markdown brief (- = stdin)
@@ -83,9 +83,10 @@ Exits 0 when every watched session has finished; Ctrl-C exits 0.`,
 GLM cost of every zcode-agent session whose workspace is <dir> or below it (default:
 the current directory), per session and in total, at Z.ai API list price
 (USD per M tokens: GLM-5.3-Flash 0.15 input / 0.03 cached / 0.50 output;
-GLM-5.3 1.40 / 0.26 / 4.40). Counts come from each session's engine DB:
-every request of the implementer, its subagents and the visual verifier,
-across resumes. ~ marks an estimate (no cache split).
+GLM-5.3 1.40 / 0.26 / 4.40; GLM-5.4 provisionally the same as GLM-5.3 until
+Z.ai lists it). Counts come from each session's engine DB: every request of
+the implementer, its subagents and the visual verifier, across resumes.
+~ marks an estimate (no cache split, or a provisional price).
   --app    also the desktop app's own sessions in that directory
   --json   {type:"cost", dir, total, sessions[, app]}
 ZCODE_PRICES='{"GLM-5.3-Flash":{"input":0.15,"cached":0.03,"output":0.5}}' overrides.`,
@@ -109,24 +110,25 @@ plan file: {cwd?, decisions?, context?, files?, model?, effort?, limits?,
   --detach     supervise in a background process
   --id <name>  plan name (default: file basename)
   --cwd <dir>  workspace override
-Exit: 0 completed, 10 blocked, 8 partial/failed, 124 timeout.`,
+Exit: 0 completed, 10 blocked, 8 partial/failed, 124 timeout, 7 name taken.`,
   login: `usage: printf %s "$ZAI_API_KEY" | zcode-agent login
 Store a Z.ai API key (read from piped stdin, never echoed) in ~/.zcode-agent.
 Not needed when ZAI_API_KEY is set or the ZCode app holds a key.`,
   doctor: `usage: zcode-agent doctor [--json] [--install-browser]
-Engine, key, inherited MCP servers and skills, and browser report.
+Engine, key, inherited MCP servers and skills, and browser report (with
+--hermetic, --no-browser, --mcp, --skills: the setup such a run would get).
 --install-browser installs the Chromium build the default Playwright server
 drives (needed only without the ZCode app's own Playwright server).`,
   skills: `usage: zcode-agent skills [install|uninstall] [claude|codex]
 Install the orchestrator skills (default: show status).`,
   acp: `usage: zcode-agent acp [options]
 Serve the Agent Client Protocol (ACP v1) on stdio: T3 Code, Zed and any ACP
-client run GLM-5.3 through it. Each ACP session is a zcode-agent session
+client run GLM-5.4 (or GLM-5.3, GLM-5.3-Flash) through it. Each ACP session is a zcode-agent session
 (status, watch, cost see it); clients switch mode, model and effort per session.
   --mode <mode>    default for new sessions: build (ask before edits and
                    commands) | edit (accept edits) | plan | yolo (full access)
                    default build (or $ZCODE_ACP_MODE)
-  --model <id>     glm-5.3 | glm-5.3-flash (default glm-5.3)
+  --model <id>     glm-5.4 | glm-5.3 | glm-5.3-flash (default glm-5.4)
   --effort <lvl>   low | high | max (default high)
   --timeout-ms <n> per prompt (default: none)
   --mcp <json|@f>  add MCP servers (repeatable)   --hermetic   --no-browser

@@ -1,7 +1,7 @@
 'use strict';
 // `zcode-agent acp`: an Agent Client Protocol (ACP v1) agent on stdio, so
-// T3 Code, Zed and other ACP clients drive GLM-5.3 through the ZCode engine
-// directly (DESIGN §20).
+// T3 Code, Zed and other ACP clients drive GLM-5.4 (or GLM-5.3, GLM-5.3-Flash)
+// through the ZCode engine directly (DESIGN §21).
 //
 //   client ⇄ (ACP: JSON-RPC 2.0, one object per line) ⇄ this process
 //          ⇄ (ZCode Protocol, lib/appserver.js) ⇄ one engine per session
@@ -29,7 +29,7 @@ const { openSession, runTurn, TurnError } = require('./appserver.js');
 const { reservePort } = require('./ports.js');
 const { workspaceRoot } = require('./workspace.js');
 const { sessionCost } = require('./cost.js');
-const { normalizeModel, normalizeEffort, supportedEfforts } = require('./models.js');
+const { normalizeModel, normalizeEffort, supportedEfforts, OFFICIAL_IDS } = require('./models.js');
 const map = require('./acp-map.js');
 
 const PROTOCOL_VERSION = 1;
@@ -43,6 +43,7 @@ const ERR = {
   notFound: -32002,
 };
 const MAX_TIMER_MS = 2147483647;
+const RESULT_STOP_REASONS = { cancelled: 'cancelled', error_max_turns: 'max_turn_requests', error_max_tool_calls: 'max_turn_requests' };
 // An ACP session's record between turns: not live (`wait` returns, `watch`
 // shows it done, `cancel` has nothing to stop) though its client may prompt
 // again; `running` only while a turn runs.
@@ -174,7 +175,6 @@ class Agent {
     this.env = env;
     this.version = version;
     this.sessions = new Map();
-    this.clientCapabilities = {};
     this.cachedRuntime = null;
     peer.onRequest = (method, params) => this.handle(method, params);
     peer.onNotification = (method, params) => {
@@ -208,6 +208,8 @@ class Agent {
         return this.newSession(params);
       case 'session/load':
         return this.loadSession(params);
+      case 'session/resume': // load without the history replay
+        return this.loadSession(params, { replay: false });
       case 'session/list':
         return this.listSessions(params);
       case 'session/prompt':
@@ -219,9 +221,12 @@ class Agent {
       case 'session/set_config_option':
         return this.setConfig(this.session(params), params.configId, params.value)
           .then((s) => ({ configOptions: this.options(s) }));
-      case 'session/close':
-        await this.closeSession(this.session(params), { reason: 'closed' });
+      case 'session/close': {
+        // Closing a session that is not open succeeds (ACP): nothing to do.
+        const open = this.sessions.get(params && params.sessionId);
+        if (open) await this.closeSession(open, { reason: 'closed' });
         return {};
+      }
       case 'session/cancel': // tolerated as a request too
         this.cancel(params);
         return {};
@@ -230,15 +235,14 @@ class Agent {
     }
   }
 
-  initialize(params) {
-    this.clientCapabilities = (params && params.clientCapabilities) || {};
+  initialize() {
     return {
       protocolVersion: PROTOCOL_VERSION,
       agentCapabilities: {
         loadSession: true,
         promptCapabilities: { image: true, audio: false, embeddedContext: true },
         mcpCapabilities: { http: true, sse: true },
-        sessionCapabilities: { list: {}, close: {} },
+        sessionCapabilities: { list: {}, close: {}, resume: {} },
       },
       authMethods: [
         {
@@ -247,7 +251,7 @@ class Agent {
           description: 'Sign in to the ZCode app, set ZAI_API_KEY, or pipe a key into `zcode-agent login`.',
         },
       ],
-      agentInfo: { name: 'zcode-agent', title: 'zcode-agent (GLM-5.3)', version: this.version },
+      agentInfo: { name: 'zcode-agent', title: 'zcode-agent (GLM)', version: this.version },
     };
   }
 
@@ -339,7 +343,9 @@ class Agent {
     return s;
   }
 
-  async loadSession(params) {
+  // session/load replays the conversation at the client; session/resume
+  // (replay: false) reopens it for a client that already shows it.
+  async loadSession(params, { replay = true } = {}) {
     const cwd = this.realCwd(params.cwd);
     const id = params.sessionId;
     let s = this.sessions.get(id);
@@ -366,8 +372,10 @@ class Agent {
     }
     try {
       await this.ensureEngine(s);
-      const history = await s.client.request('session/messages', { sessionId: s.engine.sessionId }, { timeoutMs: 30000 });
-      for (const update of map.historyUpdates(history && history.messages, { cwd: s.cwd })) this.send(s, update);
+      if (replay) {
+        const history = await s.client.request('session/messages', { sessionId: s.engine.sessionId }, { timeoutMs: 30000 });
+        for (const update of map.historyUpdates(history && history.messages, { cwd: s.cwd })) this.send(s, update);
+      }
     } catch (err) {
       // Nothing of a failed load may outlive it: engine, port, owner lock
       // (a retry would otherwise find its own lock and refuse).
@@ -400,6 +408,9 @@ class Agent {
     const opts = { env: this.env, builtinConfig: this.builtinConfig() };
     if (configId === 'mode') {
       if (!map.MODE_IDS.includes(value)) throw new AcpError(ERR.invalidParams, `unknown mode "${value}" (${map.MODE_IDS.join(', ')})`);
+      // An engine still starting was given the old mode: wait for it, or the
+      // change (yolo → build, build → plan) would never reach it.
+      if (s.starting) await s.starting.catch(() => {});
       if (s.client && !s.client.dead && s.engine) {
         await s.client.request('session/setMode', { sessionId: s.engine.sessionId, mode: value }, { timeoutMs: 15000 });
       }
@@ -407,7 +418,7 @@ class Agent {
       this.send(s, { sessionUpdate: 'current_mode_update', currentModeId: value });
     } else if (configId === 'model') {
       const model = normalizeModel(value);
-      if (!model) throw new AcpError(ERR.invalidParams, `unknown model "${value}" (GLM-5.3, GLM-5.3-Flash)`);
+      if (!model) throw new AcpError(ERR.invalidParams, `unknown model "${value}" (${OFFICIAL_IDS.join(', ')})`);
       s.model = model;
       s.effort = map.effortFor(model, s.effort, opts);
     } else if (configId === 'effort') {
@@ -489,8 +500,9 @@ class Agent {
       mcpSpecs: [...(this.defaults.mcpSpecs || []), map.mcpSpec(s.mcpServers)],
       hermetic,
       // The client passes its own MCP servers, and each desktop server's
-      // tool schemas ride along on every model request (measured: the
-      // desktop's five cost ~16k input tokens per request). Playwright and
+      // tool schemas ride along on every model request (measured in 1.3.0:
+      // 33.5k → 21.8k input tokens on the first request without the
+      // desktop's servers). Playwright and
       // the client's servers stay; --mcp-inherit / ZCODE_ACP_INHERIT_MCP=1
       // add the rest back.
       inheritMcp: !hermetic && (!!this.defaults.mcpInherit || env.ZCODE_ACP_INHERIT_MCP === '1'),
@@ -498,6 +510,7 @@ class Agent {
       skillsDirs: this.defaults.skillsDirs || [],
       noSkills: !!this.defaults.noSkills,
       inheritDesktop: !!this.defaults.inheritDesktop || env.ZCODE_INHERIT_DESKTOP === '1',
+      builtinConfig: runtime.builtinConfig,
       profile: 'general-purpose',
       model: s.model,
       instructions: ACP_AGENTS_MD,
@@ -515,7 +528,7 @@ class Agent {
           resumeSessionId: record.engineSessionId || s.startFacts.engineSessionId || null,
           requiredMcp: built.mcp.added,
           mode: s.mode,
-          onMcpStatuses: (statuses) => recordMcpHealth(rootDir(env), statuses, built.mcp.inherited),
+          onMcpStatuses: (statuses) => recordMcpHealth(rootDir(env), statuses, built.mcp.inherited, { scrub: runtime.scrub }),
         });
         if (s.closed) throw new AcpError(ERR.notFound, `session "${s.id}" is closed`);
         s.engine = { sessionId: opened.sessionId, created: opened.created };
@@ -583,8 +596,8 @@ class Agent {
       permission: (params) => ask(map.permissionRequest(params, { cwd: s.cwd })),
       userInput: (params) => {
         if (params.schema && params.schema.interaction === 'plan_approval') return ask(map.planApprovalRequest(params));
-        // AskUserQuestion and MCP elicitations: ACP v1 has no form UI, so the
-        // model asks in chat and the next prompt carries the answer.
+        // AskUserQuestion and MCP elicitations: ACP elicitation is not used
+        // yet, so the model asks in chat and the next prompt carries the answer.
         return {
           action: 'decline',
           reason: 'This client has no question form. Ask the user in your reply instead and end your turn; their next message is the answer.',
@@ -621,24 +634,25 @@ class Agent {
     let mapper = null;
     let phaseAt = 0;
     const activity = s.activity;
+    const timeoutMs = Math.min(this.defaults.timeoutMs || MAX_TIMER_MS, MAX_TIMER_MS);
     try {
+      // Nothing to send: no engine start and no session record for it.
+      if (!map.promptText(params.prompt, { saveImage: () => 'image' }).trim()) return { stopReason: 'end_turn' };
       this.cancelPrewarm(s);
       if (!(await this.untilCancelled(s, this.ensureEngine(s)))) return { stopReason: 'cancelled' };
       this.commit(s);
-      const text = map.promptText(params.prompt, { saveImage: (block, i) => this.saveImage(s, block, i), model: s.model, env });
-      if (!text.trim()) return { stopReason: 'end_turn' };
+      const text = map.promptText(params.prompt, { saveImage: (block, i) => this.saveImage(s, block, i), model: s.model, env, builtinConfig: this.builtinConfig() });
       const record = store.readSession(s.id, env) || {};
       this.persist(s, { phase: 'working', turns: (record.turns || 0) + 1, pid: process.pid, state: 'running', status: null });
       mapper = new map.TurnMapper({ engineSessionId: s.engine.sessionId, cwd: s.cwd });
       mapper.mode = s.mode;
       mapper.title = s.title || null;
       mapper.prompt = text;
-      const timeoutMs = this.defaults.timeoutMs || MAX_TIMER_MS;
       const turn = await runTurn(s.client, { sessionId: s.engine.sessionId }, {
         modelId: s.model,
         effort: s.effort,
         prompt: text,
-        deadline: Date.now() + Math.min(timeoutMs, MAX_TIMER_MS),
+        deadline: Date.now() + timeoutMs,
         signal: s.abort.signal,
         onFrame: (frame) => {
           for (const update of mapper.feed(frame)) {
@@ -675,16 +689,26 @@ class Agent {
         },
       });
       for (const update of mapper.closeOpen('completed')) this.send(s, update);
-      this.addUsage(s, turn.usage);
+      this.addUsage(s, turn.usage, turn.modelRequests);
       return { stopReason: 'end_turn' };
     } catch (err) {
       if (mapper) for (const update of mapper.closeOpen('failed')) this.send(s, update);
+      // What a stopped turn used is still billed: counted before any return.
+      if (err instanceof TurnError && err.turn) this.addUsage(s, err.turn.usage, err.turn.modelRequests);
       if (s.abort.signal.aborted) return { stopReason: 'cancelled' };
       if (err instanceof TurnError) {
-        if (err.turn) this.addUsage(s, err.turn.usage);
         if (err.kind === 'cancelled') return { stopReason: 'cancelled' };
         if (err.kind === 'engine_exit') this.dropEngine(s);
-        if (err.kind === 'result_type' && /max|limit/i.test(err.message)) return { stopReason: 'max_turn_requests' };
+        if (err.kind === 'timeout') {
+          // The agent's own --timeout-ms: the turn was stopped, which the
+          // user should read in the conversation, not as an error toast.
+          this.send(s, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `\n\nStopped: this prompt ran past the agent's time limit (--timeout-ms ${timeoutMs}). Send a message to continue.` } });
+          return { stopReason: 'cancelled' };
+        }
+        // Engine stops that ACP has a stop reason for; any other non-success
+        // result (error_max_budget, …) stays an error the user sees.
+        const stop = err.kind === 'result_type' && RESULT_STOP_REASONS[err.resultType];
+        if (stop) return { stopReason: stop };
         throw new AcpError(ERR.internal, this.scrub(err.message).slice(0, 1000));
       }
       throw err instanceof AcpError ? err : new AcpError(ERR.internal, this.scrub(err && err.message ? err.message : String(err)).slice(0, 1000));
@@ -711,8 +735,11 @@ class Agent {
     }
   }
 
-  addUsage(s, usage) {
-    if (!usage || !s.persisted) return;
+  // The engine's usage is {inputTokens, outputTokens}; requests are counted
+  // from the turn's model_request_started events.
+  addUsage(s, usage, requests = 0) {
+    if (!s.persisted || (!usage && !requests)) return;
+    usage = usage || {};
     try {
       store.updateSession(s.id, (r) => {
         const t = r.usageTotal || { inputTokens: 0, outputTokens: 0, modelRequests: 0 };
@@ -720,7 +747,7 @@ class Agent {
           usageTotal: {
             inputTokens: (t.inputTokens || 0) + (usage.inputTokens || 0),
             outputTokens: (t.outputTokens || 0) + (usage.outputTokens || 0),
-            modelRequests: (t.modelRequests || 0) + (usage.modelRequestCount || 0),
+            modelRequests: (t.modelRequests || 0) + (requests || 0),
           },
         };
       }, this.env);
@@ -778,7 +805,10 @@ class Agent {
     s.closed = true;
     this.cancelPrewarm(s);
     this.dropEngine(s);
-    if (s.persisted) this.persist(s, { state: 'finished', phase: 'done', status: 'completed', closedReason: reason });
+    // Only the process that owns the session writes its closing state: a
+    // load refused because another agent has it open must not mark that
+    // agent's running session finished.
+    if (s.persisted && s.releaseOwner) this.persist(s, { state: 'finished', phase: 'done', status: 'completed', closedReason: reason });
     if (s.releasePort) s.releasePort();
     if (s.releaseOwner) s.releaseOwner();
     s.releasePort = null;
@@ -828,7 +858,29 @@ function serve({ defaults, env = process.env, version, input = process.stdin, ou
     agent.shutdownSync(reason);
     if (code !== null) process.exit(code);
   };
-  peer.onClose = () => stop('client closed stdin', 0);
+  // The client closed stdin: stop running prompts and let their replies (and
+  // anything already written) reach the pipe before exiting. Bounded, so a
+  // client that is gone can never leave the agent hanging.
+  peer.onClose = () => {
+    if (done) return;
+    peer.failPending('client disconnected');
+    const running = [];
+    for (const s of agent.sessions.values()) {
+      if (s.abort) s.abort.abort();
+      if (s.running) running.push(s.running);
+    }
+    const exit = () => process.exit(0);
+    setTimeout(exit, 3000).unref();
+    output.on('error', exit);
+    const finish = () => {
+      if (done) return;
+      done = true;
+      agent.shutdownSync('client closed stdin');
+      output.write('', exit);
+    };
+    if (!running.length) finish();
+    else Promise.race([Promise.allSettled(running), new Promise((r) => setTimeout(r, 2000))]).then(finish);
+  };
   process.on('SIGTERM', () => stop('SIGTERM', 0));
   process.on('SIGINT', () => stop('SIGINT', 0));
   process.on('SIGHUP', () => stop('SIGHUP', 0));
@@ -836,4 +888,4 @@ function serve({ defaults, env = process.env, version, input = process.stdin, ou
   return { peer, agent };
 }
 
-module.exports = { serve, Agent, Peer, AcpError, PROTOCOL_VERSION, ERR };
+module.exports = { serve, Agent };

@@ -117,6 +117,17 @@ test('zcode-agent result <id>: brief with --json, human view without, full with 
   await run(['cancel', 'r-2']);
 });
 
+test('an idle ACP session (no handback file) reads completed in result and wait, not interrupted', async () => {
+  store.createSession('acp-1', { kind: 'acp', cwd: fake.work, model: 'GLM-5.4', effort: 'high', owns: [], checks: [] });
+  store.updateSession('acp-1', { state: 'finished', status: 'completed', phase: 'idle' });
+  const r = await run(['result', 'acp-1', '--json']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).status, 'completed');
+  const w = await run(['wait', 'acp-1', '--json']);
+  assert.equal(w.code, 0, w.stderr);
+  assert.doesNotMatch(w.stdout, /resume/);
+});
+
 test('wait timeout: exactly one line per pending session (json and human), exit 124', async () => {
   fake.setScript({ turns: [{ hang: true, response: 'x' }] });
   for (const id of ['w-1', 'w-2']) {
@@ -191,4 +202,20 @@ test('usage errors are one line, never the help text; unknown flags get a sugges
   const quiet = await run(['task', '--quiet', '--check', './ok.sh', 'Do it']);
   assert.equal(quiet.code, 0);
   assert.equal(quiet.stderr, '');
+});
+
+test('status --json lists 50 sessions; --all lists every one', async () => {
+  for (let i = 0; i < 55; i++) store.createSession(`s-${String(i).padStart(2, '0')}`, { kind: 'run', cwd: fake.work });
+  assert.equal(lastJson((await run(['status', '--json'])).stdout).sessions.length, 50);
+  assert.equal(lastJson((await run(['status', '--json', '--all'])).stdout).sessions.length, 55);
+});
+
+test('an interrupted ACP session is not told to "zcode-agent resume"', () => {
+  const { formatResult, formatSessionView } = require('../../lib/ui.js');
+  const failed = { type: 'result', status: 'failed', id: 'zc-acp1', kind: 'acp', issues: ['interrupted before completion'], error: { kind: 'interrupted', message: 'gone' } };
+  assert.doesNotMatch(formatResult(failed, { color: false }), /zcode-agent resume/);
+  assert.match(formatResult({ ...failed, kind: 'task' }, { color: false }), /zcode-agent resume zc-acp1/);
+  const view = { id: 'zc-acp1', kind: 'acp', state: 'interrupted', cwd: '/w', model: 'GLM-5.4', effort: 'high' };
+  assert.match(formatSessionView(view), /reopen the session in the ACP client/);
+  assert.doesNotMatch(formatSessionView(view), /zcode-agent resume/);
 });

@@ -20,7 +20,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const { DEFAULT_MODEL } = require('./models.js');
+const { DEFAULT_MODEL, addedModelRegistration } = require('./models.js');
 
 // The desktop app's live directory. ZAI_CODE_LIVE_DIR points elsewhere
 // (e.g. a second desktop profile, or a fixture in tests).
@@ -29,7 +29,6 @@ function liveDir(env = process.env) {
 }
 
 const LIVE_ZCODE = liveDir({});
-const LIVE_V2 = path.join(LIVE_ZCODE, 'v2');
 
 // v2 top-level entries we deliberately never copy.
 const V2_EXCLUDE_FILES = new Set(['credentials.json', '.DS_Store']);
@@ -79,7 +78,7 @@ function listDir(dir) {
 // has no zai-api rule or can't be read: the ZCode app keeps an empty
 // provider_config.json (providerRules: []) when signed in with a coding
 // plan, and recreates it if deleted (1.3.1, issue #2).
-function rewriteProviderConfig(target, key) {
+function rewriteProviderConfig(target, key, builtinConfig) {
   const parsed = readJson(target);
   const rules =
     parsed &&
@@ -92,16 +91,36 @@ function rewriteProviderConfig(target, key) {
   rule.config.group = rule.config.group || 'standard-personal';
   rule.config.access = { type: 'api-key', apiKey: key };
   parsed.config.providerConfigRules.providerRules = [rule];
+  registerAddedModels(parsed.config, builtinConfig);
   writeJson600(target, parsed);
   return true;
+}
+
+// Registers the models the engine's builtin config does not list yet
+// (models.js ADDED_MODELS: GLM-5.4) on the zai-api rule of a personal
+// provider config. The app's own rules for other providers and models are
+// kept; one for the same zai-api model is replaced, since the engine refuses
+// a model declared twice.
+function registerAddedModels(config, builtinConfig) {
+  const { ids, rules } = addedModelRegistration(builtinConfig);
+  if (!ids.length) return config;
+  const rule = config.providerConfigRules.providerRules.find((r) => r.providerId === 'zai-api');
+  rule.config.personalModelIds = [...new Set([...(rule.config.personalModelIds || []), ...ids])];
+  const mcr = config.modelConfigRules || {};
+  const keep = (list) => (Array.isArray(list) ? list : []).filter((r) => !(r && r.providerId === 'zai-api' && ids.includes(r.modelId)));
+  config.modelConfigRules = {
+    providerModelRules: [...keep(mcr.providerModelRules), ...rules],
+    manualProviderModelRules: keep(mcr.manualProviderModelRules),
+  };
+  return config;
 }
 
 // Standalone (no app config to copy). modelConfigRules must be present,
 // even empty: without it the engine registers no zai-api models and
 // session/create fails with "Provider Registry 中不存在 Model:
 // zai-api/GLM-5.3-Flash" (1.0, live-probed).
-function synthesizedProviderConfig(key) {
-  return {
+function synthesizedProviderConfig(key, builtinConfig) {
+  const parsed = {
     schemaVersion: 1,
     config: {
       modelConfigRules: { providerModelRules: [], manualProviderModelRules: [] },
@@ -119,6 +138,8 @@ function synthesizedProviderConfig(key) {
       },
     },
   };
+  registerAddedModels(parsed.config, builtinConfig);
+  return parsed;
 }
 
 // --- skills -------------------------------------------------------------------
@@ -258,7 +279,8 @@ function unhealthyMcp(servers, health, now = Date.now()) {
 // statuses: the engine's mcp/list status map; inherited: {name: def} of the
 // inherited servers this session registered. Failed ones are recorded,
 // connected ones cleared. Never throws.
-function recordMcpHealth(root, statuses, inherited, now = Date.now()) {
+// `scrub` removes the API key from the stored error text.
+function recordMcpHealth(root, statuses, inherited, { now = Date.now(), scrub = (s) => s } = {}) {
   if (!root || !statuses) return;
   try {
     const health = readMcpHealth(root);
@@ -273,7 +295,7 @@ function recordMcpHealth(root, statuses, inherited, now = Date.now()) {
           sig,
           failedAt: now,
           failures: ((prev && prev.failures) || (prev ? 1 : 0)) + 1,
-          error: error ? String(typeof error === 'string' ? error : JSON.stringify(error)).slice(0, 200) : null,
+          error: error ? scrub(String(typeof error === 'string' ? error : JSON.stringify(error))).slice(0, 200) : null,
         };
         changed = true;
       } else if (state === 'connected' && health[name]) {
@@ -284,7 +306,7 @@ function recordMcpHealth(root, statuses, inherited, now = Date.now()) {
     if (!changed) return;
     const file = mcpHealthFile(root);
     const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(health, null, 2) + '\n');
+    fs.writeFileSync(tmp, JSON.stringify(health, null, 2) + '\n', { mode: 0o600 });
     fs.renameSync(tmp, file);
   } catch {
     /* health is an optimisation; a failed write just retries the server */
@@ -429,10 +451,9 @@ function skillsSnapshot(entries, root) {
       fs.mkdirSync(base, { recursive: true, mode: 0o700 });
       const tmp = path.join(base, `.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`);
       try {
-        for (const { name, from } of entries) {
-          fs.cpSync(from, path.join(tmp, name), { recursive: true, dereference: true });
-        }
         fs.mkdirSync(tmp, { recursive: true });
+        // A skill that cannot be copied is left out (callers see it missing).
+        for (const { name, from } of entries) copySkill(from, path.join(tmp, name));
         fs.renameSync(tmp, dir);
       } catch (err) {
         fs.rmSync(tmp, { recursive: true, force: true });
@@ -456,6 +477,30 @@ function skillsSnapshot(entries, root) {
   }
 }
 
+// Copies one skill, following links. A dangling link is left out; a skill
+// that still cannot be copied (a link loop) is removed again. One broken
+// skill in the app's skills directory must not fail every session.
+function copySkill(from, to) {
+  try {
+    fs.cpSync(from, to, {
+      recursive: true,
+      dereference: true,
+      filter: (src) => {
+        try {
+          fs.statSync(src);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+    return true;
+  } catch {
+    fs.rmSync(to, { recursive: true, force: true });
+    return false;
+  }
+}
+
 function linkDir(target, link) {
   try {
     fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
@@ -465,13 +510,13 @@ function linkDir(target, link) {
   }
 }
 
-// Rewrites the frontmatter `model:` of an agent profile when it names
-// GLM-5.3 / GLM-5.3-Flash (any prefix: "account:x/GLM-5.3",
+// Rewrites the frontmatter `model:` of an agent profile when it names a
+// GLM-5.x id (any prefix: "account:x/GLM-5.3",
 // "custom:account%3Ax:GLM-5.3") so its model part is `model`.
 function pinAgentModel(text, model) {
   const m = /^(---\r?\n)([\s\S]*?)(\r?\n---)/.exec(text);
   if (!m) return text;
-  const front = m[2].replace(/^(\s*model\s*:\s*["']?)([^\n"']*?)(?:\/|:)GLM-5\.3(?:-Flash)?(["']?\s*)$/im, (all, a, prefix, tail) => {
+  const front = m[2].replace(/^(\s*model\s*:\s*["']?)([^\n"']*?)(?:\/|:)GLM-5\.\d+(?:-Flash)?(["']?\s*)$/im, (all, a, prefix, tail) => {
     const sep = all.slice(a.length + prefix.length, a.length + prefix.length + 1);
     return `${a}${prefix}${sep}${model}${tail}`;
   });
@@ -495,6 +540,9 @@ function buildEngineHome({
   profile = null,
   model = DEFAULT_MODEL,
   instructions = EXECUTOR_AGENTS_MD,
+  // The engine's builtin provider config: models it already lists are not
+  // registered again. Unknown → every ADDED_MODELS entry is registered.
+  builtinConfig = null,
 }) {
   const zdir = path.join(home, '.zcode');
   const v2 = path.join(zdir, 'v2');
@@ -507,12 +555,14 @@ function buildEngineHome({
   const liveV2 = path.join(live, 'v2');
   const v2Files = listDir(liveV2).filter((e) => e.isFile() && !isV2Excluded(e.name));
   for (const entry of v2Files) {
+    // The app's v2 files can hold provider keys (v2/config.json): owner-only.
     fs.copyFileSync(path.join(liveV2, entry.name), path.join(v2, entry.name));
+    fs.chmodSync(path.join(v2, entry.name), 0o600);
   }
   const providerConfig = path.join(v2, 'provider_config.json');
   const copied = v2Files.some((e) => e.name === 'provider_config.json');
-  const mode = copied && rewriteProviderConfig(providerConfig, key) ? 'copied-v2-top-level' : 'synthesized';
-  if (mode === 'synthesized') writeJson600(providerConfig, synthesizedProviderConfig(key));
+  const mode = copied && rewriteProviderConfig(providerConfig, key, builtinConfig) ? 'copied-v2-top-level' : 'synthesized';
+  if (mode === 'synthesized') writeJson600(providerConfig, synthesizedProviderConfig(key, builtinConfig));
 
   // cli/config.json: live copy (builtin:zai key swapped) + this run's MCP set.
   const cfg = readJson(path.join(live, 'cli', 'config.json')) || {};
@@ -544,7 +594,7 @@ function buildEngineHome({
     if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
     if (!inheritDesktop && entry.name !== `${profile}.md`) continue;
     fs.mkdirSync(agentsDir, { recursive: true });
-    // Profiles pinning a GLM-5.3 id would silently run another model than
+    // Profiles pinning a GLM id would silently run another model than
     // the session's: the copy follows the session (the live file is never edited).
     const text = fs.readFileSync(path.join(live, 'agents', entry.name), 'utf8');
     fs.writeFileSync(path.join(agentsDir, entry.name), pinAgentModel(text, model));
@@ -571,6 +621,7 @@ function buildEngineHome({
   fs.rmSync(skillsDir, { recursive: true, force: true });
   fs.mkdirSync(skillsDir, { recursive: true });
   let skillsCopied = 0;
+  const skillsSkipped = [];
   if (!noSkills && !hermetic) {
     const entries = desktopSkills(live);
     // One shared snapshot per distinct desktop skill set, linked into each
@@ -578,10 +629,9 @@ function buildEngineHome({
     // per session. Without a root (or links), copy as before.
     const snapshot = root ? skillsSnapshot(entries, root) : null;
     for (const { name, from } of entries) {
-      if (!snapshot || !linkDir(path.join(snapshot, name), path.join(skillsDir, name))) {
-        fs.cpSync(from, path.join(skillsDir, name), { recursive: true, dereference: true });
-      }
-      skillsCopied++;
+      const shared = snapshot && fs.existsSync(path.join(snapshot, name));
+      if ((shared && linkDir(path.join(snapshot, name), path.join(skillsDir, name))) || copySkill(from, path.join(skillsDir, name))) skillsCopied++;
+      else skillsSkipped.push(name);
     }
   }
   const skillsInjected = [];
@@ -603,6 +653,8 @@ function buildEngineHome({
     copiedFiles: v2Files.length,
     skillsCopied,
     skillsInjected,
+    // Desktop skills that could not be copied (a link loop, unreadable files).
+    skillsSkipped,
     mcp: {
       servers,
       // Names the caller explicitly added — the CLI waits for these to
@@ -712,26 +764,18 @@ function engineEnv({ home, builtinProviderConfig, parentEnv = process.env, sessi
 
 module.exports = {
   buildEngineHome,
-  pinAgentModel,
   engineEnv,
   rootDir,
   liveDir,
   migrateRoot,
   effectiveMcpServers,
   liveMcpServers,
-  inheritableMcpServers,
-  needsOAuth,
   EXECUTOR_AGENTS_MD,
   ACP_AGENTS_MD,
   DEFAULT_BROWSER_SERVER,
   PLAYWRIGHT_MCP_VERSION,
   readMcpHealth,
   recordMcpHealth,
-  unhealthyMcp,
   mcpRetryAfter,
-  mcpSignature,
-  skillsSnapshot,
-  discoverSkillDirs,
   LIVE_ZCODE,
-  LIVE_V2,
 };

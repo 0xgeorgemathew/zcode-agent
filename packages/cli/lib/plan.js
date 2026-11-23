@@ -387,9 +387,16 @@ async function supervise(name, { deadline = Infinity, signal } = {}) {
   if (!release) return { busy: true };
   try {
     store.updatePlanState(name, { supervisor: { pid: process.pid } });
+    let r = null;
     for (;;) {
       const state = store.readPlanState(name);
-      const r = resolvePlan(state.file, state.cwd);
+      // The plan file is re-read every round. One caught mid-save (or
+      // briefly gone) must not end the supervisor: the last good read stands.
+      try {
+        r = resolvePlan(state.file, state.cwd);
+      } catch (err) {
+        if (!r || !(err instanceof PlanError)) throw err;
+      }
       const sessions = sessionList(r.plan);
       const byId = new Map(sessions.map((s) => [s.id, s]));
       const statuses = sessionStatuses(r, state);
@@ -418,8 +425,13 @@ async function supervise(name, { deadline = Infinity, signal } = {}) {
   }
 }
 
-// A detached supervisor process (`zcode __plan <name>`); records its pid.
+// A detached supervisor process (`zcode-agent __plan <name>`); records its
+// pid. A plan that already has a live supervisor keeps it: a second one
+// would find the plan lock taken and exit, leaving its dead pid in the state
+// (the plan then read "interrupted" between stages).
 function startSupervisor(name) {
+  const current = store.readPlanState(name);
+  if (supervisorAlive(current)) return current.supervisor.pid;
   const dir = store.plansDir();
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const log = fs.openSync(path.join(dir, `${name}.log`), 'a', 0o600);
@@ -439,18 +451,14 @@ module.exports = {
   resolvePlan,
   planName,
   sessionList,
-  afterOf,
   sessionBase,
   checkPlan,
   sessionStatuses,
-  aggregate,
   exitCodeForPlan,
   supervisorAlive,
   planReport,
   launchFailure,
   sessionInvocation,
-  preflightContext,
-  launchSession,
   resumeSession,
   supervise,
   startSupervisor,

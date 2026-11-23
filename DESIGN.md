@@ -276,16 +276,18 @@ scratch paths).
 
 ## 7. Model registration & the allowlist
 
-Two independent locks, so "GLM 5.3 / Flash only" holds even if one leaks:
+Two independent locks, so "only the supported GLM models" holds even if one
+leaks:
 
 1. **Wrapper allowlist (authoritative).** `lib/models.js` normalizes user input
-   case-insensitively: `glm-5.3`, `5.3`, `53` → `GLM-5.3`; `glm-5.3-flash`,
-   `5.3-flash`, `flash`, `53f` → `GLM-5.3-Flash` (official ids pass through
-   verbatim; they are exactly `"GLM-5.3"` / `"GLM-5.3-Flash"` per research:
-   `modelRegistration`). Anything else → exit 2:
-   `Error: unknown model "<input>". zai-code supports only glm-5.3 and
-   glm-5.3-flash (GLM-5.3, GLM-5.3-Flash).` The wrapper constructs **every**
-   engine request itself, so no other id can reach the wire.
+   case-insensitively: `glm-5.4`, `5.4`, `54` → `GLM-5.4` (1.4, §22);
+   `glm-5.3`, `5.3`, `53` → `GLM-5.3`; `glm-5.3-flash`, `5.3-flash`, `flash`,
+   `53f` → `GLM-5.3-Flash` (official ids pass through verbatim, in exactly
+   that casing, per research: `modelRegistration`). Anything else → exit 2:
+   `unknown model "<input>". zcode-agent supports only glm-5.4, glm-5.3,
+   glm-5.3-flash (official ids: GLM-5.4, GLM-5.3, GLM-5.3-Flash).` The wrapper
+   constructs **every** engine request itself, so no other id can reach the
+   wire.
 2. **Registry lock.** The scratch HOME registers only the `zai-api` provider,
    whose template declares `builtinModelIds: ["GLM-5.3","GLM-5.3-Flash"]`
    (research: `modelRegistration`, from
@@ -294,10 +296,12 @@ Two independent locks, so "GLM 5.3 / Flash only" holds even if one leaks:
    must be the exact official uppercase forms — `zai-api` gets NO case
    normalization from the engine (research: `modelRegistration`).
 
-Default model: **GLM-5.3** at effort **high** (since 1.2.0, in the CLI and in
-`zcode-agent acp`; until then the default was GLM-5.3-Flash at `max`, with
-GLM-5.3 one `--model glm-5.3` away). GLM-5.3-Flash stays one `--model flash`
-away, and the visual verifier always uses it, because GLM-5.3 cannot see images.
+Default model: **GLM-5.4** at effort **high** (since 1.4.0;
+GLM-5.3 from 1.2.0, GLM-5.3-Flash at `max` before that). GLM-5.3 and
+GLM-5.3-Flash stay one `--model` away, and the visual verifier always uses
+Flash, the cheapest image-capable model. GLM-5.4 is outside the registry lock
+above (no engine lists it yet): zcode-agent registers it per session (§22),
+and the wrapper allowlist stays the only way an id reaches the wire.
 
 ---
 
@@ -475,8 +479,8 @@ documented as such. Runs needing a custom profile pass `--profile <name>`.
 1. Wraps the user's instructions in a dispatch-forcing preamble: "You MUST use
    the Agent tool (profileId: `<profile>`, default `general-purpose`) to
    accomplish the task; do not do the work yourself; report the result."
-2. Runs the normal §9 sequence in `yolo` mode (§9.1) on Flash (default) with
-   effort max.
+2. Runs the normal §9 sequence in `yolo` mode (§9.1) on the session's model
+   and effort (the defaults, unless flags say otherwise).
 3. After turn completion, verifies programmatically — never trusts the prose:
    calls `session/subagents` and joins `ended.items` with the scratch agents
    dir (`metadata.json`: agentId, childSessionId, profileId, status,
@@ -996,8 +1000,8 @@ Progress: `relay` counts `model_request_started`, running subagents and
 stall rule (8 min, running only). `zcode watch` lives in
 lib/commands/sessions.js.
 
-Model default: `buildEngineHome({model})` rewrites `model:` pins to GLM-5.3 /
-GLM-5.3-Flash in copied agent profiles (`pinAgentModel`).
+Model default: `buildEngineHome({model})` rewrites a `model:` pin naming any
+GLM-5.x id in a copied agent profile to the session's model (`pinAgentModel`).
 
 ### 18.7 Plans (phase 7)
 
@@ -1197,12 +1201,37 @@ symlink-resolved spellings).
 
 ## 21. 1.1 — ACP agent
 
-- **Shape.** `zcode-agent acp` is a JSON-RPC 2.0 peer over newline-delimited stdio (`lib/acp.js`), with a pure translation layer (`lib/acp-map.js`). Each ACP session is a store session (`kind: "acp"`): own engine (one `app-server` per session, own process group), HOME, port and tmp; `owner.lock` makes one process drive it. Store record and engine are created lazily (first prompt or `session/load`): T3 Code probes with `initialize` + `session/new` every 15 min and kills the process.
+- **Shape.** `zcode-agent acp` is a JSON-RPC 2.0 peer over newline-delimited stdio (`lib/acp.js`), with a pure translation layer (`lib/acp-map.js`). Each ACP session is a store session (`kind: "acp"`): own engine (one `app-server` per session, own process group), HOME, port and tmp; `owner.lock` makes one process drive it. The store record is written at the first prompt (or by `session/load`); the engine starts 1.5 s after `session/new` in a reserved directory (prewarm, 1.3) that is dropped if no prompt comes: T3 Code probes with `initialize` + `session/new` every 15 min and kills the process.
 - **Protocol version.** v1, and no top-level `info` in the initialize result: T3 Code negotiates v2 when `info` is present, and v2 drops `set_mode`/`set_model`. Mode, model and effort are `configOptions` (categories `mode`, `model`, `thought_level`), plus legacy `modes`. `set_config_option` returns the full option list (T3 resets its pickers otherwise).
 - **Engine modes.** `build` (asks for side effects; live: Write medium risk, Bash with redirection high), `edit` (file edits allowed), `plan` (read-only; ExitPlanMode is an `interaction/requestUserInput` with `schema.interaction: "plan_approval"`, answered `{action:"accept", content:{answer:"approve"}}`), `yolo`. `guarded` bypasses prompts like yolo and `auto` is unimplemented, so neither is offered.
 - **Permissions.** `interaction/requestPermission` carries `options[]` (`allow_once`, `allow_always` = this project, `deny`) each with a ready `response`; the reply schema is strict (`{decision, reason?, modifiedInput?, permissionUpdates?}`; an extra `resolvedAt` → denied, "Permission request failed"). ACP kinds: allow_always ← allow_always/allow_session, reject_once ← deny. Cancelled/failed client answer → deny with a stop instruction. A denial produces `permission.resolved {decision:"deny"}` and no tool result: the tool call is failed from that event.
 - **Events.** `model.streaming` `tool_input_start` (announce: pending, generic title) → `tool_call` (input complete: title, locations, diff) → `tool.updated` started/result. Frames of other engine sessions (subagents) are dropped. TodoWrite/TodoRead are not tool calls; TodoWrite input is the plan. Context used = last main `model_request_completed` usage (input + output); window from the latest `state.updated` model list, else the creation projection (session/create's own settings list says 1M for Flash; projection and later updates say 200k).
 - **History.** `session/messages` → visible `user_prompt` and `assistant_response` parts (text, reasoning, tool with state.input/output); system reminders and timeline events are skipped.
 - **Titles.** The engine titles from the first input verbatim; a title starting with markup (T3 wraps the request in `<t3_code_instructions>`) is replaced by the `<user_request>` text.
-- **Not mapped.** AskUserQuestion and MCP elicitations are declined with "ask in your reply" (ACP v1 has no form UI). Images are saved to `$ZCODE_TMP/attachments` and named in the prompt (the engine's prompt is a string). Client fs/terminal capabilities are not used: the engine has its own tools.
+- **Not mapped.** AskUserQuestion and MCP elicitations are declined with "ask in your reply" (zcode-agent does not use ACP elicitation yet). Images are saved to `$ZCODE_TMP/attachments` and named in the prompt (the engine's prompt is a string). Client fs/terminal capabilities are not used: the engine has its own tools.
+
+## 22. GLM-5.4 on an engine that does not know it
+
+- **Facts (2026-11-23).** Z.ai released GLM-5.4 on its coding plans: vision, 1M context, model id `glm-5.4` (`GLM-5.4` in ZCode's casing). No API docs or list price yet. No ZCode release lists it: the zai-api template's `builtinModelIds` are `["GLM-5.3","GLM-5.3-Flash"]` in v3.15.1 (engine 0.16.9, bundled) and still in v3.18.2 (0.17.1, 2026-11-13). Its only matching builtin `modelRules` entry is the generic `glm-5` one (200k, text only, `disabled|enabled`).
+- **Registration.** The engine's personal provider schema allows `personalModelIds` on a provider rule and `providerModelRules` entries (sparse model config). The resolver lists builtin then personal ids per provider, and a model is executable when its effective config is complete and `enabled`. `buildEngineHome` adds `GLM-5.4` to the zai-api rule's `personalModelIds` and one `providerModelRules` entry: `enabled`, `contextWindow` 1M, `supportsImage`, `reasoningLevel` `low|high|max` with the glm-5.3 Anthropic-messages map (`thinking: enabled`, `output_config.effort: <level>`), `maxOutputTokens` 128000. Rules the app's own config has for zai-api/GLM-5.4 (smart or manual) are dropped, because the engine refuses one model declared both ways; other rules are kept.
+- **Precedence.** `models.js` ADDED_MODELS is the single source for these values, for the engine (registration) and for zcode-agent's own checks (effort validation, `supportsImage`, ACP pickers, doctor), since the generic builtin rule would otherwise say text only and `disabled|enabled`. When the engine's zai-api template lists the id, nothing is registered and the builtin rules decide, as for GLM-5.3.
+- **Verifier.** Stays on GLM-5.3-Flash: `visionModel` prefers the cheapest image-capable model, not the first.
+- **Cost.** Priced provisionally at the GLM-5.1/5.2/5.3 list rate (`provisional` in `LIST_PRICES`), and every total that includes it is an estimate (`~`) until a caller's `ZCODE_PRICES` rate replaces it.
+- **Live-probed (2026-11-23, engine 0.16.9, the Z.ai API).** `test/live/glm54-acceptance.test.js` runs it: the engine accepts the registration with the app's copied config and with the synthesized one, `model_request_started` reports `zai-api`/`GLM-5.4`, a resumed session stays on it, and it reads a number out of a generated PNG (GLM-5.3 answers something else). Direct API probes the same day: the Anthropic endpoint lists `glm-5.4` and serves `GLM-5.4`; a 521k-token prompt is accepted (so the window is past 200k; "1M" is Z.ai's plan-page label); `max_tokens` is accepted up to 131072 (128000 registered, the glm-5.3 value); `output_config.effort` is not validated for GLM-5.4 (any string is accepted), so the levels cannot be read from the API and stay `low|high|max`. The engine logs `session.model_selection.persist_failed` (a foreign-key warning) for GLM-5.4 exactly as it does for GLM-5.3 in headless sessions; resume is unaffected because every `session/send` carries the model.
+
+## 23. 1.4 — decisions of the release audit
+
+- **Timeouts are timeouts.** `--timeout-ms` bounds engine start too (a timer and the abort signal kill the starting engine; `openSession` knows neither), `runTurn` never sends a prompt with no time left, each check gets `min(checkTimeoutMs, time left)` with a 1 s floor, and running out before the verifier or a repair turn is `error.kind: "timeout"` (124), not `partial` or `checks_failed`: the caller's reaction is the same `resume … "continue"`.
+- **A check ends with its shell.** `close` waits for every holder of the output pipes, so `server & curl …` hung until the check timeout and was reported as one. The check finishes 250 ms after the shell's `exit` and its process group is always killed. A process a check backgrounds no longer outlives it; that is the point.
+- **What a resume sends.** `run`/`agent` store their prompt in `invocation.json`; a resume of a session with no engine session yet sends it plus the message (as `task` always did with its contract). "Leaving preflight" is written only once the engine session is open, so a resume refused or failed before that stays a preflight.
+- **Who may excuse a change.** Only a session that had an engine session and was not a preflight counts as concurrent when attributing changed files. A record left by a refused start, or a read-only preflight, excuses nothing.
+- **Ownership globs.** A glob match owns its subtree (`packages/*` covers `packages/a/src/x.ts`), which is what `ownsOverlap` always assumed. Braces and brackets stay literal: `app/[id]` is a real path in Next.js, and a silent brace expansion would change what existing contracts own.
+- **Snapshots.** `git status` runs with `--no-optional-locks` (a snapshot must not hold `index.lock` against the executor's `git add`), files are `lstat`ed (a link is the link), and an untracked file that vanished is `deleted`.
+- **MCP health counts invocations.** One failed server is recorded once per `execute()`, not once per engine start (implementer plus each verifier engine), so the documented 6 h back-off is what a single failing run produces. The stored error text is scrubbed and the file is mode 600.
+- **Typos are not prompts.** One bare word within edit distance 1 of a command (2 from five letters) exits 2 with the correction; `run <word>` sends it. Unknown single-dash flags exit 2 (`-v` prints the version). Both were paid model turns.
+- **Plans.** `startSupervisor` does nothing when the plan has a live supervisor (a second one exited on the plan lock and left its dead pid in the state: the plan read `interrupted` between stages). The supervisor and `plan wait` keep the last good read of the plan file. `plan resume` reports refusals and continues. Flags a plan would drop (`--hermetic`, `--mcp`, `--skills`, …) are refused.
+- **ACP.** `session/resume` is `session/load` without the replay. `session/close` on a session that is not open succeeds. A mode change waits for an engine that is still starting (it was created with the old mode and never told). A load refused because another process owns the session writes nothing to that session's record. A tool result update carries the edit's diff again, because an update's `content` replaces the call's. The agent's own `--timeout-ms` ends a prompt as `cancelled` with a line in the conversation. On stdin close, running prompts are aborted and given 2 s to answer before exit (3 s hard limit).
+- **`--mcp-list` redacts.** Header, env and URL credentials print as `***`, and the Z.ai key is removed wherever a definition carries it.
+- **Nothing outlives the process.** `lib/procs.js` tracks the process group of every engine and check and kills what is left at `exit`: the second Ctrl-C calls `process.exit(130)` and skips `execute()`'s `finally`. Detached workers and plan supervisors are meant to outlive their parent and are not tracked.
+- **Not done here** (still open from the 1.4 plan in `docs/plans/`): `cancel` reaching the verifier engine, `scopeUnchecked` → `unverified`, check-touched files excusing an earlier executor edit, the event-log tail, snapshot hash caching, bounded briefs, `--max-requests`, `prune`, `logs`, `plan cancel`, `maxParallel`, CI.
 

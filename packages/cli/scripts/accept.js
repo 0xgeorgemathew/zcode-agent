@@ -36,6 +36,14 @@ const SUBAGENT_PROMPT =
   'Use the Agent tool to create the file done.txt in the current directory containing exactly AVOCADO, then report the agent id.';
 
 const MODES = {
+  glm54: {
+    label: 'accept:54 (one-shot via GLM-5.4, the default model, effort max)',
+    prompt: ONE_SHOT_PROMPT,
+    token: 'PINEAPPLE',
+    expectedModel: 'GLM-5.4',
+    cliArgs: ['--json', '--full', '--effort', 'max'],
+    timeoutMs: 300000,
+  },
   flash: {
     label: 'accept:flash (one-shot via GLM-5.3-Flash, effort max)',
     prompt: ONE_SHOT_PROMPT,
@@ -58,7 +66,7 @@ const MODES = {
     token: 'AVOCADO',
     expectedModel: 'GLM-5.3-Flash',
     cliArgs: [
-      'agent', '--json', '--full', '--effort', 'max', '--profile', 'general-purpose',
+      'agent', '--json', '--full', '--effort', 'max', '--model', 'glm-5.3-flash', '--profile', 'general-purpose',
     ],
     timeoutMs: 480000,
   },
@@ -190,7 +198,7 @@ async function main() {
   const mode = MODES[modeName];
   if (!mode) {
     process.stderr.write(
-      `usage: node scripts/accept.js <flash|subagent|glm53>\n`
+      `usage: node scripts/accept.js <glm54|flash|subagent|glm53>\n`
     );
     process.exit(2);
   }

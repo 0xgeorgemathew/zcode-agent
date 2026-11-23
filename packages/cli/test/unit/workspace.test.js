@@ -125,3 +125,38 @@ test('isZcodePath: .zcode and Playwright MCP scratch dirs are tooling output, no
   assert.ok(ws.isZcodePath('app/.playwright-mcp/console.log'));
   assert.ok(!ws.isZcodePath('src/playwright-mcp.js'));
 });
+
+// --- 1.4 ------------------------------------------------------------------------------
+
+test('a glob match owns what is beneath it, as a plain path does; braces and brackets are literal', () => {
+  assert.ok(ws.isOwned('packages/a/src/x.ts', ['packages/*']));
+  assert.ok(ws.isOwned('packages/a', ['packages/*']));
+  assert.ok(!ws.isOwned('other/a/x.ts', ['packages/*']));
+  assert.ok(!ws.isOwned('src/deep/a.ts', ['src/*.css']));
+  assert.ok(ws.isOwned('app/[id]/page.tsx', ['app/[id]']), 'a bracketed path is itself');
+  assert.ok(!ws.isOwned('app/i/page.tsx', ['app/[id]']));
+});
+
+test('an absolute --owns through a symlinked directory resolves into the workspace', () => {
+  const real = path.join(base, 'real-ws');
+  fs.mkdirSync(path.join(real, 'src'), { recursive: true });
+  const link = path.join(base, 'link-ws');
+  fs.symlinkSync(real, link, 'dir');
+  assert.deepEqual(ws.normalizeOwns([path.join(link, 'src')], link, real), ['src']);
+  assert.deepEqual(ws.normalizeOwns([path.join(link, 'new', '*.ts')], link, real), ['new/*.ts'], 'a path that does not exist yet');
+});
+
+test('git mode: a deleted untracked file is "deleted"; a link to a directory is the link, not its contents', () => {
+  const repo = path.join(base, 'git-ws');
+  const outside = path.join(base, 'outside');
+  fs.mkdirSync(repo);
+  fs.mkdirSync(outside);
+  execFileSync('git', ['init', '-q', repo]);
+  fs.writeFileSync(path.join(repo, 'scratch.txt'), 'x');
+  fs.symlinkSync(outside, path.join(repo, 'ext'), 'dir');
+  const before = ws.snapshot(repo);
+  assert.equal(before.kind, 'git');
+  fs.rmSync(path.join(repo, 'scratch.txt'));
+  fs.writeFileSync(path.join(outside, 'new.txt'), 'changed inside the link target');
+  assert.deepEqual(ws.diffSnapshots(before, ws.snapshot(repo)), [{ path: 'scratch.txt', change: 'deleted' }]);
+});

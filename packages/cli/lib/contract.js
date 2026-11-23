@@ -37,10 +37,19 @@ const CONTRACT_KEYS = [
 ];
 const LIMIT_KEYS = ['timeoutMs', 'maxRepairs', 'checkTimeoutMs'];
 
+// A list of strings (one string is a list of one). An object entry is a
+// contract mistake ("checks": [{"command": …}]), never the text "[object Object]".
 const asList = (v) =>
   v === undefined || v === null
     ? []
-    : (Array.isArray(v) ? v : [v]).map((x) => String(x).trim()).filter(Boolean);
+    : (Array.isArray(v) ? v : [v])
+      .map((x) => {
+        if (x !== null && typeof x === 'object') {
+          throw new ContractError(`contract list entries must be strings, got ${JSON.stringify(x).slice(0, 80)}`);
+        }
+        return String(x ?? '').trim();
+      })
+      .filter(Boolean);
 
 const uniq = (items) => [...new Set(items)];
 const VIEWPORT_RE = /^\d{2,5}x\d{2,5}$/;
@@ -104,6 +113,14 @@ function normalizeContract(base = {}, additions = {}) {
     if (limits[k] !== undefined && !(Number.isFinite(limits[k]) && limits[k] >= 0)) {
       throw new ContractError(`contract limits.${k} must be a non-negative number`);
     }
+  }
+  if (limits.maxRepairs !== undefined && !Number.isInteger(limits.maxRepairs)) {
+    throw new ContractError('contract limits.maxRepairs must be an integer');
+  }
+  // Below 1 ms is no timeout at all (0 would even be dropped for the
+  // default); the flags refuse it too.
+  for (const k of ['timeoutMs', 'checkTimeoutMs']) {
+    if (limits[k] !== undefined && limits[k] < 1) throw new ContractError(`contract limits.${k} must be at least 1`);
   }
   const viewports = uniq([...asList(base.viewports), ...asList(additions.viewports)]);
   for (const v of viewports) {
@@ -274,7 +291,7 @@ function buildTaskPrompt(contract, { ownsDisplay = contract.owns, session = null
 // `visual`: the verifier's unmet entries {criterion, viewport, seen, note, shot}.
 function buildRepairPrompt(failures, { attempt, maxRepairs, visual = [] }) {
   const blocks = failures.map((f) => {
-    const why = f.timedOut ? 'timed out' : `exit ${f.exitCode}`;
+    const why = f.timedOut ? 'timed out' : f.exitCode === null ? 'killed by a signal' : `exit ${f.exitCode}`;
     return `### \`${f.command}\` (${why})\n\`\`\`\n${f.output.trim().slice(-3000) || '(no output)'}\n\`\`\``;
   });
   const head = failures.length
@@ -322,7 +339,11 @@ function buildResumePrompt(message, { kind, portChange = null }) {
 
 // --- handback -------------------------------------------------------------------
 
-const HANDBACK_RE = /```zcode-handback[^\n]*\n([\s\S]*?)```/g;
+// The block ends at a fence on its own line: a ``` inside a JSON string
+// (a summary quoting code) is not the end. HANDBACK_LOOSE_RE accepts a
+// closing fence glued to the JSON, tried only when no block ends properly.
+const HANDBACK_RE = /```zcode-handback[^\n]*\n([\s\S]*?)\n[ \t]*```/g;
+const HANDBACK_LOOSE_RE = /```zcode-handback[^\n]*\n([\s\S]*?)```/g;
 const STATUS_ALIASES = new Map([
   ['done', 'done'],
   ['complete', 'done'],
@@ -382,7 +403,8 @@ function unmetVisual(entries, declared) {
 // response text with the block removed.
 function parseHandback(text) {
   const source = String(text || '');
-  const matches = [...source.matchAll(HANDBACK_RE)];
+  let matches = [...source.matchAll(HANDBACK_RE)];
+  if (matches.length === 0) matches = [...source.matchAll(HANDBACK_LOOSE_RE)];
   if (matches.length === 0) return { handback: null, report: source.trim(), error: 'missing' };
   const last = matches[matches.length - 1];
   const report = (source.slice(0, last.index) + source.slice(last.index + last[0].length)).trim();
@@ -459,6 +481,10 @@ function deriveStatus({
     if (handback.status === 'blocked' || handback.questions.length) {
       return { status: 'blocked', issues: ['preflight found open questions (see questions)'] };
     }
+    // "No open questions" is only what a "done" preflight says.
+    if (handback.status !== 'done') {
+      return { status: 'unverified', issues: [`the preflight reported "${handback.status || 'no status'}" without questions`] };
+    }
     return { status: 'completed', issues };
   }
   if (handback && handback.status === 'blocked') {
@@ -514,11 +540,9 @@ function deriveStatus({
 module.exports = {
   ContractError,
   sessionSection,
-  CONTRACT_KEYS,
   DEFAULT_VIEWPORTS,
   parseUnit,
   questionText,
-  unmetVisual,
   visualGaps,
   normalizeContract,
   buildTaskPrompt,

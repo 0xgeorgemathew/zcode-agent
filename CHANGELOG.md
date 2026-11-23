@@ -1,5 +1,78 @@
 # Changelog
 
+## 1.4.0
+
+GLM-5.4 becomes the default model, and a full audit of the code fixed what it found. Three changes can alter what an existing caller sees; they are marked **Changes behaviour**.
+
+### Added
+
+- **GLM-5.4, the new default.** **Changes behaviour.** Z.ai released GLM-5.4 on 23 November 2026, and every command, plan and `zcode-agent acp` session now runs on it at effort `high`. It reads images, so the executor can look at its own screenshots and at images attached in ACP clients, and it has a 1M context. `--model glm-5.4` (or `5.4`, `54`) selects it; GLM-5.3 and GLM-5.3-Flash stay one `--model` away. A run without `--model` used GLM-5.3: pass `--model glm-5.3` to keep it. No ZCode engine release lists GLM-5.4 yet, so zcode-agent registers it on the Z.ai provider of each session's own engine config, the way the ZCode app registers a model you add by hand, and stops once the engine lists it itself. Checked against the real engine and API on release day: `npm run test:live` runs it with and without the ZCode app's config, resumes a session on it and has it read a number out of an image.
+- **ACP: GLM-5.4 in the model picker**, first and selected by default. The agent's title no longer names a single model, and the picker no longer labels one model "default" (`--model` decides that per agent).
+- **ACP `session/resume`.** Reopens a session without replaying its history, for a client that already shows the conversation. `session/load` still replays.
+- **A typo is not a prompt.** A single bare word one or two letters away from a command name (`stauts`) exits 2 with the correction instead of being sent to the model as a prompt; `zcode-agent run <word>` sends it anyway. An unknown single-dash flag exits 2 too, and `-v` prints the version.
+- **`status --json --all`** lists every session; `--all` only affected the human listing and JSON stopped at 50.
+- **`npm run accept:54`** (`scripts/accept.js glm54`), the acceptance run for the default model.
+
+### Changed
+
+- **The visual verifier stays on GLM-5.3-Flash.** It used the first image-capable model; with GLM-5.4 able to see, that would have moved every verifier round to the larger model. It now prefers the cheapest one.
+- **GLM-5.4 is priced provisionally.** Z.ai has published no API price for it. `cost` and `watch` price it at the GLM-5.3 list rate and mark every amount that includes it with `~` (the ACP usage update carries the same amount; the protocol has no field for the marker). A rate given in `ZCODE_PRICES` is used as is and not marked.
+- **A check ends when its shell exits.** **Changes behaviour.** A check such as `npm run preview & sleep 2; curl -f localhost:$ZCODE_PORT` hung until the check timeout, because the background server kept the output pipe open, and was then reported as timed out and repaired for nothing. The check now finishes with its shell, and whatever it left running is stopped with it.
+- **Running out of time is always a timeout.** **Changes behaviour.** `--timeout-ms` now bounds engine start as well (a 2 s timeout used to wait out the engine's own 30 s and exit 5), no prompt is sent with no time left, each check gets the time the run has left when that is less than `--check-timeout-ms`, and running out before a repair turn or the visual verifier exits 124 with the `resume … "continue"` hint. Those cases used to end `checks_failed` (8) or `partial`.
+- **Ownership globs own their subtree.** `--owns 'packages/*'` now covers `packages/a/src/x.ts`, as a plain path covers what is under it and as the overlap check always assumed. Before, only direct children matched and every deeper edit was a scope violation.
+- **`--mcp-list` redacts credentials.** Header, environment and URL secrets print as `***`, and the Z.ai key is removed wherever a server definition carries it.
+- **ACP stop reasons.** An engine turn that ends `cancelled` returns `stopReason: "cancelled"`, and `error_max_turns` / `error_max_tool_calls` return `max_turn_requests`. Before, `cancelled` was a JSON-RPC error, and any result type containing "max" or "limit" (`error_max_budget` too) became `max_turn_requests`. A prompt stopped by the agent's own `--timeout-ms` ends `cancelled` with a line in the conversation, not as an error.
+- **`plan` refuses flags it would drop** (`--hermetic`, `--no-browser`, `--mcp`, `--skills`, `--no-skills`, `--inherit-desktop`, `--stream`, `--include-reasoning`): plan sessions were started without them.
+- **`doctor` reports the setup a run with the same flags would get**: it honours `--hermetic`, `--no-browser`, `--mcp`, `--skills`, `--no-skills` and `--inherit-desktop`, and separates servers skipped for OAuth from those skipped for failing recently (all were labelled OAuth).
+- **`--max-repairs` and `limits.maxRepairs` must be whole numbers**, `limits.timeoutMs` / `limits.checkTimeoutMs` below 1 are refused, and a contract list entry that is an object is refused instead of becoming the text `[object Object]` (a check written as `{"command": …}` ran as that string).
+- **A preflight is `completed` only when it reports `done`**; one that reports `partial` or an unknown status without questions is `unverified`.
+- **A timeout under a minute says seconds** ("timed out after 20 s", not "0 min").
+- **Help:** `--hermetic` replaces `--mcp-inherit` (which only affects `acp`) in the `run`/`task`/`agent` help, `--inherit-desktop` is described as AGENTS.md, plugins and agent profiles, `--hermetic` says the Playwright server stays, and the plan section lists `--cwd`.
+- **README rewritten** around GLM-5.4, with every claim checked against the code: the model table, what was measured on release day, glob and check semantics, the event list, exit codes for plans, and the brief example.
+
+### Fixed
+
+- **A resumed session could lose its task.** A `run` or `agent` session that never reached the model (queue timeout, engine start failure) was resumed with only your message, the literal text `continue` in the documented case. Its prompt is now kept with the session and sent first. A preflight resume that was refused or failed before the engine opened used to be recorded as "no longer a preflight", so the next resume skipped the task prompt and the checks; it now stays a preflight until the engine session is open.
+- **Scope violations excused by a session that never ran.** Any session record updated during a run counted as "concurrent", so a detached start that was refused for a conflict, or a read-only preflight, excused this session's edits inside its declared paths. Only a session that actually ran can own a change now.
+- **ACP: a mode change while the engine was starting never reached it.** With `acp --mode yolo`, switching to `build` in the first seconds of a session left the engine in full-access mode while the client showed Ask. The change now waits for the engine.
+- **ACP: loading a session another agent has open** was refused but marked that agent's running session `finished`. The refused load now writes nothing.
+- **ACP: a finished edit lost its diff.** The result update's content replaced the diff sent with the tool call; it now carries both.
+- **ACP: a reply in flight is delivered when the client disconnects.** Closing stdin exited at once and could drop a prompt's response; running prompts are now stopped and answered first (bounded to 3 s).
+- **ACP: `session/close` on a session that is not open succeeds**, as the protocol asks, and an empty prompt no longer starts an engine and writes a session record.
+- **ACP: `--effort medium` was silently replaced by the model's highest level.** It is a usage error (exit 2), as everywhere else.
+- **An engine that died while connecting MCP servers** passed for an open session and failed on first use with no retry (after 20 s of polling when `--mcp` servers were given). It now fails the start, which is retried once.
+- **`plan resume --detach` on a running plan** replaced the live supervisor's pid with a process that exited at once, so the plan read `interrupted` between stages and `plan wait` could exit 8. A plan with a live supervisor keeps it.
+- **A plan file saved mid-edit** no longer ends the detached supervisor or `plan wait` (exit 2); both keep the last good read. `plan resume` no longer stops at the first session that refuses, which left the sessions it had already resumed without a supervisor.
+- **One dead MCP server was counted once per engine start**, so a single run with a verifier round put it on the 24-hour back-off instead of the documented six hours. It is counted once per run; the stored error text is scrubbed and the file is mode 600.
+- **One broken skill failed every session.** A dangling symlink or link loop inside any skill in the ZCode app's skills directory made every non-hermetic session die with a raw `ENOENT`. Dangling links are left out, a skill that still cannot be copied is skipped, and `doctor` names it.
+- **Change tracking in git repos:** a deleted untracked file was reported `modified`; an untracked symlink to a directory was reported `modified` whenever anything changed inside its target (a false scope violation); and a snapshot could hold `index.lock` against a `git add` running at the same time.
+- **An absolute `--owns` path through a symlinked directory** was rejected as "outside the workspace".
+- **Resuming a session whose workspace was deleted** exits 2 with a message instead of a stack trace.
+- **A handback or verifier block whose text contains a code fence** was cut at that fence and rejected as invalid JSON, spending the one handback-request turn.
+- **A check killed by a signal** is reported as `killed by SIGSEGV` (it read `exit null`).
+- **Token usage of a turn that ends with a non-success result is counted** in `usage` and `usageTotal`, and ACP sessions record their model request count (it was always 0, and nothing for a cancelled or timed-out turn).
+- **A second Ctrl-C no longer leaves the engine running.** The second signal exits at once, which skipped the clean-up: an engine that had not answered the stop request kept running tools in your workspace, in yolo mode, with nothing to stop it. Engines and checks still alive when zcode-agent exits, by any path, are now killed with it.
+- **Closing the terminal stops the run.** SIGHUP is handled like SIGINT and SIGTERM: the engine is told to stop and the session ends `cancelled`, instead of a yolo-mode engine running on. A cancel during engine start now takes effect at once.
+- **`--timeout-ms` above 2147483647 no longer times out at once** (Node fires larger timers immediately); it is capped at that value, on resume too.
+- **`wait` on a detached run that never started** exits with that run's code (3 no key, 2 not found) instead of 5, and a detached resume that loses the race for a session no longer marks the session `failed` while the other process runs it.
+- **The API key cannot reach `issues` or MCP events.** Engine and MCP error text copied into a result's issues, and the error of an `--mcp` server's `mcp` event, are scrubbed like the error message already was.
+- **ACP sessions read `completed` in `result`, `wait` and `plan` briefs** between prompts and after closing, and an interrupted one is no longer told to `zcode-agent resume` (which refuses ACP sessions).
+- **`cost`:** usage of a model with no known price showed as `$0.00` with nothing to say so; it is flagged `+?` and named. `cost --app` reads the app directory every other command uses (`ZAI_CODE_LIVE_DIR`) and no longer counts sibling directories whose names differ only where yours has `_` or `%`. `999,999` tokens print as `1.0M`, not `1000.0k`.
+- **`resume <id> -p "message"`** looked up a session named by the message; `-p` is the message there.
+- **`--mcp-list` shows what a run would use:** it reads `ZAI_CODE_LIVE_DIR` and skips servers that failed recently, as a run does.
+- **`watch --plan` on a plan whose file is gone** prints one line and exits 2 instead of a stack trace.
+- **ACP resource links to non-file URIs keep the URI** in the prompt; only the name reached the model.
+- **Copies of the ZCode app's `v2` settings files in a session's engine home are mode 600**; they can hold the app's provider keys and were created with the default mode.
+- **README drawings** point at `main`; they were pinned to a commit that is not in the repository's history.
+- **Tests:** the unit suite passes with the engine built and no ZCode app installed (one test assumed an app), and when the temp directory is inside a git checkout; a price assertion that could not fail does; the live suite no longer depends on which MCP servers this machine's ZCode app has, and the GLM-5.3 acceptance test reports a timeout instead of crashing on it. `npm run accept:subagent` asks for the model it checks for (it expected Flash on the default model and could not pass).
+
+### Removed
+
+- The `sqlite3` command-line fallback in `cost` (unreachable since Node 22.13, the minimum, ships `node:sqlite`).
+- Unused code: `resolveKey` (`lib/key.js`), `APP_BUNDLE_ENGINE` (`lib/engine.js`), an engine-client hook nothing set, two turn fields nothing read, the ACP agent's stored client capabilities, and 39 exports no other module imports.
+- `docs/BUILD-REPORT.md` (the 0.2.0 build report, which described files that no longer exist).
+- A stray `"dependencies": {"zcode-agent": …}` at the workspace root (a self-reference from an `npm install` at the root). `scripts/release-check.mjs` now refuses a root with dependencies, a version with no changelog entry, notes left under "Unreleased", and a version that is already tagged.
+
 ## 1.3.1
 
 ### Fixed

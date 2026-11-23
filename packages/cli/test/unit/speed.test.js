@@ -120,14 +120,14 @@ test('an inherited server that keeps failing waits twice as long each time (capp
   const dead = { command: 'dead' };
   fs.writeFileSync(path.join(live, 'cli', 'config.json'), JSON.stringify({ mcp: { servers: { dead } } }));
   const now = Date.now();
-  recordMcpHealth(root, { dead: { status: 'failed' } }, { dead }, now - 7 * H);
-  recordMcpHealth(root, { dead: { status: 'failed' } }, { dead }, now);
+  recordMcpHealth(root, { dead: { status: 'failed' } }, { dead }, { now: now - 7 * H });
+  recordMcpHealth(root, { dead: { status: 'failed' } }, { dead }, { now });
   const health = readMcpHealth(root);
   assert.equal(health.dead.failures, 2);
   const names = (h) => Object.keys(effectiveMcpServers({ live, health: h, browser: false }));
   assert.deepEqual(names({ dead: { ...health.dead, failedAt: now - 7 * H } }), [], 'second failure: still skipped after 7 h');
   assert.deepEqual(names({ dead: { ...health.dead, failedAt: now - 13 * H } }), ['dead'], 'retried after 12 h');
-  recordMcpHealth(root, { dead: { status: 'connected' } }, { dead }, now);
+  recordMcpHealth(root, { dead: { status: 'connected' } }, { dead }, { now });
   assert.deepEqual(readMcpHealth(root), {});
 });
 

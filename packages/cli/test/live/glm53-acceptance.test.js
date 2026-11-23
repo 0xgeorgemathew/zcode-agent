@@ -1,6 +1,6 @@
 'use strict';
-// TDD step 7 — THE single GLM-5.3 acceptance run (DESIGN §12 step 7). The
-// only test in the suite allowed to run GLM-5.3. Model evidence is
+// The single GLM-5.3 acceptance run (DESIGN §12 step 7): the previous
+// flagship stays selectable with --model glm-5.3. Model evidence is
 // engine-side (model_request_started event), not the wrapper's echo.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -44,7 +44,7 @@ test('glm-5.3 one-shot acceptance: OK, model cross-checked on the wire', async (
         last = { result, events };
         break;
       }
-      const why = `exit ${code}: ${stderr.trim().slice(0, 300)} | ${JSON.stringify(result).slice(0, 300)}`;
+      const why = `exit ${code}: ${stderr.trim().slice(0, 300)} | ${JSON.stringify(result ?? null).slice(0, 300)}`;
       if (attempt === 1) {
         console.log(`[retry] ${why}`);
         continue;
